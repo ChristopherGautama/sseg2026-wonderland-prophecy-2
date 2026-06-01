@@ -106,10 +106,25 @@
   .grid-footer { font-size: 12px; color: #aaa; padding: 4px 6px; }
   .grid-footer b { color: #5fc77a; }
 
-  .notbuilt {
-    display: flex; align-items: center; justify-content: center; height: 100%;
-    color: #777; font-size: 18px; font-weight: 600;
+  /* TRIO toggle */
+  .trio-wrap { display: flex; flex-wrap: wrap; gap: 4px; max-width: 420px; }
+  .trio-btn {
+    background: #1d2128; border: 1px solid #333a44; color: #cfd6df;
+    padding: 4px 8px; border-radius: 4px; font-size: 12px; cursor: pointer; white-space: nowrap;
   }
+  .trio-btn:hover:not(:disabled) { border-color: #4a5566; }
+  .trio-btn.on { background: #1e3a4f; border-color: #4f8fcf; color: #aee0ff; font-weight: 700; }
+  .trio-btn:disabled { opacity: .6; cursor: not-allowed; }
+
+  /* ALOKASI inputs */
+  .alok-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+  .alok-slot { display: flex; flex-direction: column; gap: 2px; }
+  .alok-lbl { font-size: 10px; color: #8a93a0; white-space: nowrap; }
+  table.grid .alok-slot input[type=number] { width: 60px; }
+  .alok-total { font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .alok-total.ok   { color: #5fc77a; }
+  .alok-total.warn { color: #ffce5a; }
+  .alok-total.err  { color: #ff6b5a; }
 
   /* REVEAL PANEL */
   .reveal-panel { background: #14171d; border: 1px solid #2a2f38; border-radius: 6px; padding: 10px 14px; }
@@ -159,14 +174,20 @@ const ROUND_CONFIG = {
            opsi:{A:'SPYR', B:'NOCT', C:'PRPR', D:'RBBT'} },
   R3:    { tipe:'single',  mult:1.2, wagerMin:20, wagerMax:100, kunci:'A',
            opsi:{A:'SPYR', B:'NOCT', C:'QULL', D:'PRPR'} },
-  R4:    { tipe:'alokasi', mult:1.5, wager:100, minSaham:2, maxPerSaham:50,
+  R4:    { tipe:'alokasi', mult:1.5, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
+           slot:{A:'SPYR', B:'NOCT', C:'QULL', D:'MIRR', E:'GRIN'},
            outcome:{ SPYR:2.5, NOCT:0.5, QULL:1.0, MIRR:1.5, GRIN:0.5 } },
-  R5:    { tipe:'trio',    mult:1.5, wagerMin:30, wagerMax:150, trio:['A','B','C'] },
-  R6:    { tipe:'trio',    mult:1.8, wagerMin:30, wagerMax:150, trio:['A','B','C'] },
-  R7:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['A','C','E'] },
-  R8:    { tipe:'alokasi', mult:2.2, wager:100, minSaham:2, kelipatan:10,
+  R5:    { tipe:'trio',    mult:1.5, wagerMin:30, wagerMax:150, trio:['A','B','C'],
+           opsi:{A:'Gold', B:'Cash', C:'Gov Bond', D:'Deposito', E:'Bitcoin', F:'Index'} },
+  R6:    { tipe:'trio',    mult:1.8, wagerMin:30, wagerMax:150, trio:['A','B','C'],
+           opsi:{A:'CSTR', B:'RBBT', C:'LUMN', D:'SPYR', E:'QULL', F:'MIRR'} },
+  R7:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['A','C','E'],
+           opsi:{A:'QULL', B:'MIRR', C:'NOCT', D:'SPYR', E:'GRIN', F:'TARO'} },
+  R8:    { tipe:'alokasi', mult:2.2, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
+           slot:{A:'RBBT', B:'GRIN', C:'NOCT', D:'MIRR', E:'SPYR'},
            outcome:{ RBBT:2.5, GRIN:1.5, NOCT:1.0, MIRR:0, SPYR:0 } },
-  R9:    { tipe:'alokasi', mult:2.5, wager:100, maxPick:2,
+  R9:    { tipe:'alokasi', mult:2.5, wager:100, maxPick:2, kelipatan:10,
+           slot:{A:'EVRG', B:'HNPR', C:'LRBK', D:'MRRT'},
            outcome:{ EVRG:2.0, HNPR:1.5, LRBK:1.1, MRRT:0 } },
   BONUS: { tipe:'bonus',   mult:2.5, wagerMin:50, wagerMax:200, kunci:'B',
            opsi:{A:'QULL', B:'NOCT', C:'SPYR', D:'PRPR'}, netral:['A'] },
@@ -216,7 +237,6 @@ const bulatRp5 = (x) => Math.round(x / 5) * 5;
 /* ===================== STATE ===================== */
 const STORAGE_KEY = 'wp2-state';
 const ROUND_KEYS = Object.keys(ROUND_CONFIG);            // R1..R9, BONUS
-const PHASE1_ROUNDS = ['R1','R2','R3','BONUS'];          // berfungsi penuh di Phase 1
 const NUM_TEAMS = 10;
 
 function defaultState() {
@@ -226,7 +246,7 @@ function defaultState() {
   for (const rk of ROUND_KEYS) {
     rounds[rk] = { submissions: [], revealed: false };
     for (let i = 0; i < NUM_TEAMS; i++) {
-      rounds[rk].submissions.push({ pick:'', wager:0, locked:false, net:0, cash:0, timestamp:null });
+      rounds[rk].submissions.push({ pick:'', picks:[], alokasi:{}, wager:0, locked:false, net:0, cash:0, timestamp:null });
     }
   }
   return { teams, rounds, activeRound: 'R1' };
@@ -249,7 +269,10 @@ function loadState() {
           for (let i = 0; i < NUM_TEAMS; i++) {
             const s = parsed.rounds[rk].submissions[i];
             if (s) d.rounds[rk].submissions[i] = {
-              pick: s.pick || '', wager: +s.wager || 0, locked: !!s.locked,
+              pick: s.pick || '',
+              picks: Array.isArray(s.picks) ? s.picks.slice() : [],
+              alokasi: (s.alokasi && typeof s.alokasi === 'object') ? Object.assign({}, s.alokasi) : {},
+              wager: +s.wager || 0, locked: !!s.locked,
               net: +s.net || 0, cash: +s.cash || 0, timestamp: s.timestamp || null
             };
           }
@@ -294,9 +317,29 @@ function teamTotalScore(teamIdx) {
   return total;
 }
 
+/* ===================== HELPER ALOKASI ===================== */
+// Jumlah seluruh slot (keyed by ticker) untuk satu submission alokasi.
+function sumAlok(sub, cfg) {
+  let total = 0;
+  for (const letter in cfg.slot) total += +(sub.alokasi[cfg.slot[letter]] || 0);
+  return total;
+}
+// Bangun object alokasi keyed by ticker, hanya slot non-nol (untuk scoreAlokasi).
+function buildAlok(sub, cfg) {
+  const o = {};
+  for (const letter in cfg.slot) {
+    const t = cfg.slot[letter];
+    const v = +(sub.alokasi[t] || 0);
+    if (v) o[t] = v;
+  }
+  return o;
+}
+
 /* ===================== VALIDASI ===================== */
 // return {ok, level:'ok'|'warn'|'err', msg}
 function validateSubmission(sub, cfg, rk) {
+  if (cfg.tipe === 'trio')    return validateTrio(sub, cfg);
+  if (cfg.tipe === 'alokasi') return validateAlokasi(sub, cfg);
   const isBonus = cfg.tipe === 'bonus';
   // SKIP pada bonus selalu valid
   if (isBonus && sub.pick === 'SKIP') return { ok:true, level:'ok', msg:'SKIP — wager 0' };
@@ -313,6 +356,46 @@ function validateSubmission(sub, cfg, rk) {
     return { ok:true, level:'warn', msg:`Wager rendah (<${Math.round(0.2*cfg.wagerMax)}) — boleh lock` };
 
   return { ok:true, level:'ok', msg:'Valid' };
+}
+
+// TRIO: harus pilih tepat 3; wager dalam range; soft warning floor 20%.
+function validateTrio(sub, cfg) {
+  const n = sub.picks.length;
+  if (n !== 3) return { ok:false, level:'err', msg:`Pilih tepat 3 (kini ${n})` };
+  const w = +sub.wager;
+  if (!Number.isFinite(w)) return { ok:false, level:'err', msg:'Wager bukan angka' };
+  if (w < cfg.wagerMin || w > cfg.wagerMax)
+    return { ok:false, level:'err', msg:`Wager harus ${cfg.wagerMin}–${cfg.wagerMax}` };
+  if (w < 0.2 * cfg.wagerMax)
+    return { ok:true, level:'warn', msg:`Wager rendah (<${Math.round(0.2*cfg.wagerMax)}) — boleh lock` };
+  return { ok:true, level:'ok', msg:'Valid (3 dipilih)' };
+}
+
+// ALOKASI: total harus = wager(100), kelipatan 10, non-negatif.
+//  R4/R8: min saham terisi & maks per saham. R9: maks IPO terisi, total 0 boleh (tidak ikut).
+function validateAlokasi(sub, cfg) {
+  const isR9 = cfg.maxPick != null;
+  let nonzero = 0;
+  for (const letter in cfg.slot) {
+    const v = +(sub.alokasi[cfg.slot[letter]] || 0);
+    if (!Number.isFinite(v) || v < 0) return { ok:false, level:'err', msg:'Ada input negatif/invalid' };
+    if (cfg.kelipatan && v % cfg.kelipatan !== 0)
+      return { ok:false, level:'err', msg:`Harus kelipatan ${cfg.kelipatan}` };
+    if (cfg.maxPerSaham != null && v > cfg.maxPerSaham)
+      return { ok:false, level:'err', msg:`Maks ${cfg.maxPerSaham}/saham` };
+    if (v > 0) nonzero++;
+  }
+  const total = sumAlok(sub, cfg);
+  if (isR9) {
+    if (total === 0) return { ok:true, level:'warn', msg:'Tim tidak ikut, skor 0' };
+    if (nonzero > cfg.maxPick) return { ok:false, level:'err', msg:`Maks ${cfg.maxPick} IPO` };
+    if (total !== cfg.wager) return { ok:false, level:'err', msg:`Total harus ${cfg.wager} (kini ${total})` };
+    return { ok:true, level:'ok', msg:`Total ${total} ✓` };
+  }
+  if (cfg.minSaham != null && nonzero < cfg.minSaham)
+    return { ok:false, level:'err', msg:`Min ${cfg.minSaham} saham terisi` };
+  if (total !== cfg.wager) return { ok:false, level:'err', msg:`Total harus ${cfg.wager} (kini ${total})` };
+  return { ok:true, level:'ok', msg:`Total ${total} ✓` };
 }
 
 function allTeamsLocked(rk) {
@@ -340,7 +423,7 @@ function renderSwitcher() {
     const btn = document.createElement('button');
     btn.textContent = rk;
     if (rk === state.activeRound) btn.classList.add('active');
-    if (PHASE1_ROUNDS.includes(rk) && allTeamsLocked(rk)) btn.classList.add('locked-dot');
+    if (allTeamsLocked(rk)) btn.classList.add('locked-dot');
     btn.onclick = () => { state.activeRound = rk; scheduleSave(); render(); };
     switcherEl.appendChild(btn);
   }
@@ -352,21 +435,12 @@ function render() {
   phaseLblEl.textContent = phaseLabel(rk);
   renderSwitcher();
 
-  // header reveal button -> hanya relevan untuk fase Phase 1
-  const built = PHASE1_ROUNDS.includes(rk);
-  revealBtn.disabled = !(built && allTeamsLocked(rk));
+  // REVEAL enabled hanya saat 10 tim sudah lock (berlaku semua tipe ronde)
+  revealBtn.disabled = !allTeamsLocked(rk);
   revealBtn.textContent = state.rounds[rk].revealed ? 'REVEAL ✓' : 'REVEAL';
   revealBtn.onclick = () => doReveal(rk);
 
   mainEl.innerHTML = '';
-  if (!built) {
-    const div = document.createElement('div');
-    div.className = 'notbuilt';
-    div.textContent = 'Belum dibangun (Phase 2)';
-    mainEl.appendChild(div);
-    return;
-  }
-
   mainEl.appendChild(renderInfoPanel(cfg));
   mainEl.appendChild(renderGrid(rk, cfg));
   mainEl.appendChild(renderFooter(rk));
@@ -376,12 +450,32 @@ function render() {
 function renderInfoPanel(cfg) {
   const p = document.createElement('div');
   p.className = 'info-panel';
-  const tipeNama = { single:'Single Pick', bonus:'Bonus (opt-out + netral)' }[cfg.tipe] || cfg.tipe;
+  const tipeNama = {
+    single:'Single Pick', bonus:'Bonus (opt-out + netral)', trio:'Trio (3-of-6)', alokasi:'Alokasi (stake 100)'
+  }[cfg.tipe] || cfg.tipe;
   let html = `<span class="pill">Tipe: <b>${tipeNama}</b></span>`;
   html += `<span class="pill">Multiplier: <b>×${cfg.mult}</b></span>`;
+
+  if (cfg.tipe === 'alokasi') {
+    html += `<span class="pill">Stake: <b>${cfg.wager}</b></span>`;
+    if (cfg.kelipatan != null)   html += `<span class="pill">Kelipatan: <b>${cfg.kelipatan}</b></span>`;
+    if (cfg.minSaham != null)    html += `<span class="pill">Min saham: <b>${cfg.minSaham}</b></span>`;
+    if (cfg.maxPerSaham != null) html += `<span class="pill">Maks/saham: <b>${cfg.maxPerSaham}</b></span>`;
+    if (cfg.maxPick != null)     html += `<span class="pill">Maks pick: <b>${cfg.maxPick}</b></span>`;
+    let opts = '<span class="opts">';
+    for (const k in cfg.slot) opts += `<code>${k}=${cfg.slot[k]} ×${cfg.outcome[cfg.slot[k]]}</code>`;
+    opts += '</span>';
+    p.innerHTML = html + opts;
+    return p;
+  }
+
   html += `<span class="pill">Wager: <b>${cfg.wagerMin}–${cfg.wagerMax}</b></span>`;
-  html += `<span class="pill">Kunci: <b>${cfg.kunci}</b></span>`;
-  if (cfg.tipe === 'bonus') html += `<span class="pill">Netral: <b>${cfg.netral.join(',')}</b></span>`;
+  if (cfg.tipe === 'trio') {
+    html += `<span class="pill">Kunci: <b>${cfg.trio.join('+')}</b></span>`;
+  } else {
+    html += `<span class="pill">Kunci: <b>${cfg.kunci}</b></span>`;
+    if (cfg.tipe === 'bonus') html += `<span class="pill">Netral: <b>${cfg.netral.join(',')}</b></span>`;
+  }
   let opts = '<span class="opts">';
   for (const k in cfg.opsi) opts += `<code>${k}=${cfg.opsi[k]}</code>`;
   opts += '</span>';
@@ -392,20 +486,25 @@ function renderInfoPanel(cfg) {
 function renderGrid(rk, cfg) {
   const table = document.createElement('table');
   table.className = 'grid';
-  const isBonus = cfg.tipe === 'bonus';
+  const tipe = cfg.tipe;
+  const isBonus = tipe === 'bonus';
+  const isTrio  = tipe === 'trio';
+  const isAlok  = tipe === 'alokasi';
+
+  const pickHdr  = isTrio ? 'Pilih 3 (A–F)' : isAlok ? 'Alokasi per slot' : 'Pick';
+  const wagerHdr = isAlok ? 'Total' : 'Wager';
   table.innerHTML = `<thead><tr>
-    <th>#</th><th>Nama Tim</th><th>Pick</th><th>Wager</th><th>Status</th><th>Aksi</th><th>Total</th>
+    <th>#</th><th>Nama Tim</th><th>${pickHdr}</th><th>${wagerHdr}</th><th>Status</th><th>Aksi</th><th>Total</th>
   </tr></thead>`;
   const tbody = document.createElement('tbody');
 
   state.rounds[rk].submissions.forEach((sub, i) => {
     const tr = document.createElement('tr');
-    const val = validateSubmission(sub, cfg, rk);
-    if (!sub.locked) {
-      if (val.level === 'err') tr.classList.add('row-err');
-      else if (val.level === 'warn') tr.classList.add('row-warn');
-    }
     if (sub.locked) tr.classList.add('row-locked');
+
+    // late-bound: handler input angka memanggil refreshRow() (di-assign di bawah)
+    let refreshRow = () => {};
+    let totalSpan = null;
 
     // #
     const tdNum = document.createElement('td'); tdNum.textContent = (i+1); tr.appendChild(tdNum);
@@ -417,46 +516,90 @@ function renderGrid(rk, cfg) {
     nameInput.oninput = () => { state.teams[i] = nameInput.value; scheduleSave(); };
     tdName.appendChild(nameInput); tr.appendChild(tdName);
 
-    // Pick
+    // ---------- Pick cell (per tipe) ----------
     const tdPick = document.createElement('td');
-    const sel = document.createElement('select');
-    sel.disabled = sub.locked;
-    const blank = document.createElement('option'); blank.value=''; blank.textContent='— pilih —'; sel.appendChild(blank);
-    for (const k in cfg.opsi) {
-      const o = document.createElement('option'); o.value = k; o.textContent = `${k} (${cfg.opsi[k]})`; sel.appendChild(o);
+    if (isTrio) {
+      const wrapT = document.createElement('div'); wrapT.className = 'trio-wrap';
+      for (const letter in cfg.opsi) {
+        const btn = document.createElement('button');
+        btn.className = 'trio-btn' + (sub.picks.includes(letter) ? ' on' : '');
+        btn.textContent = `${letter} · ${cfg.opsi[letter]}`;
+        btn.disabled = sub.locked;
+        btn.onclick = () => {
+          const idx = sub.picks.indexOf(letter);
+          if (idx >= 0) sub.picks.splice(idx, 1);
+          else if (sub.picks.length >= 3) return;   // tolak pilihan ke-4 (tidak auto-ganti)
+          else sub.picks.push(letter);
+          scheduleSave(); render();
+        };
+        wrapT.appendChild(btn);
+      }
+      tdPick.appendChild(wrapT);
+    } else if (isAlok) {
+      const wrapA = document.createElement('div'); wrapA.className = 'alok-wrap';
+      for (const letter in cfg.slot) {
+        const ticker = cfg.slot[letter];
+        const slotEl = document.createElement('label'); slotEl.className = 'alok-slot';
+        const lbl = document.createElement('span'); lbl.className = 'alok-lbl';
+        lbl.textContent = `${letter} · ${ticker}`;
+        const inp = document.createElement('input');
+        inp.type = 'number'; inp.min = 0; inp.step = cfg.kelipatan || 1;
+        inp.value = sub.alokasi[ticker] != null ? sub.alokasi[ticker] : 0;
+        inp.disabled = sub.locked;
+        inp.oninput = () => {
+          sub.alokasi[ticker] = inp.value === '' ? 0 : +inp.value;
+          scheduleSave(); refreshRow();
+        };
+        slotEl.appendChild(lbl); slotEl.appendChild(inp);
+        wrapA.appendChild(slotEl);
+      }
+      tdPick.appendChild(wrapA);
+    } else {
+      const sel = document.createElement('select');
+      sel.disabled = sub.locked;
+      const blank = document.createElement('option'); blank.value=''; blank.textContent='— pilih —'; sel.appendChild(blank);
+      for (const k in cfg.opsi) {
+        const o = document.createElement('option'); o.value = k; o.textContent = `${k} (${cfg.opsi[k]})`; sel.appendChild(o);
+      }
+      if (isBonus) { const o = document.createElement('option'); o.value='SKIP'; o.textContent='SKIP'; sel.appendChild(o); }
+      sel.value = sub.pick;
+      sel.onchange = () => {
+        sub.pick = sel.value;
+        if (isBonus && sub.pick === 'SKIP') { sub.wager = 0; }
+        scheduleSave(); render();
+      };
+      tdPick.appendChild(sel);
     }
-    if (isBonus) { const o = document.createElement('option'); o.value='SKIP'; o.textContent='SKIP'; sel.appendChild(o); }
-    sel.value = sub.pick;
-    sel.onchange = () => {
-      sub.pick = sel.value;
-      if (isBonus && sub.pick === 'SKIP') { sub.wager = 0; }
-      scheduleSave(); renderRowState(rk);
-    };
-    tdPick.appendChild(sel); tr.appendChild(tdPick);
+    tr.appendChild(tdPick);
 
-    // Wager
+    // ---------- Wager / Total cell ----------
     const tdWager = document.createElement('td');
-    const wInput = document.createElement('input');
-    wInput.type = 'number'; wInput.value = sub.wager;
-    wInput.min = cfg.wagerMin; wInput.max = cfg.wagerMax;
-    const wagerDisabled = sub.locked || (isBonus && sub.pick === 'SKIP');
-    wInput.disabled = wagerDisabled;
-    wInput.oninput = () => { sub.wager = wInput.value === '' ? 0 : +wInput.value; scheduleSave(); renderRowState(rk); };
-    tdWager.appendChild(wInput); tr.appendChild(tdWager);
+    if (isAlok) {
+      totalSpan = document.createElement('span');
+      tdWager.appendChild(totalSpan);   // diisi oleh refreshRow()
+    } else {
+      const wInput = document.createElement('input');
+      wInput.type = 'number'; wInput.value = sub.wager;
+      wInput.min = cfg.wagerMin; wInput.max = cfg.wagerMax;
+      wInput.disabled = sub.locked || (isBonus && sub.pick === 'SKIP');
+      wInput.oninput = () => {
+        sub.wager = wInput.value === '' ? 0 : +wInput.value;
+        scheduleSave(); refreshRow();
+      };
+      tdWager.appendChild(wInput);
+    }
+    tr.appendChild(tdWager);
 
-    // Status
+    // ---------- Status ----------
     const tdStatus = document.createElement('td');
     tdStatus.className = 'status-cell';
-    const cls = sub.locked ? 'status-ok' : (val.level==='err'?'status-err':val.level==='warn'?'status-warn':'status-ok');
-    tdStatus.innerHTML = `<span class="${cls}">${sub.locked ? 'TERKUNCI ✓' : val.msg}</span>`;
     tr.appendChild(tdStatus);
 
-    // Aksi (lock/unlock)
+    // ---------- Aksi (lock/unlock) ----------
     const tdAct = document.createElement('td');
     const lockBtn = document.createElement('button');
     lockBtn.className = 'lock-btn' + (sub.locked ? ' unlock' : '');
     lockBtn.textContent = sub.locked ? 'UNLOCK' : 'LOCK';
-    if (!sub.locked && !val.ok) lockBtn.disabled = true;
     lockBtn.onclick = () => {
       if (sub.locked) {
         sub.locked = false;
@@ -471,24 +614,34 @@ function renderGrid(rk, cfg) {
     };
     tdAct.appendChild(lockBtn); tr.appendChild(tdAct);
 
-    // Total skor (akumulasi lintas ronde, net presisi)
+    // ---------- Total skor (akumulasi lintas ronde, net presisi) ----------
     const tdTotal = document.createElement('td');
     tdTotal.className = 'total';
-    const ts = teamTotalScore(i);
-    tdTotal.innerHTML = `Σ <b>${fmtNet(ts)}</b>`;
+    tdTotal.innerHTML = `Σ <b>${fmtNet(teamTotalScore(i))}</b>`;
     tr.appendChild(tdTotal);
+
+    // refresh ringan: update validasi/status tanpa rebuild input (caret aman)
+    refreshRow = () => {
+      const v = validateSubmission(sub, cfg, rk);
+      tr.classList.toggle('row-err',  !sub.locked && v.level === 'err');
+      tr.classList.toggle('row-warn', !sub.locked && v.level === 'warn');
+      const cls = sub.locked ? 'status-ok' : (v.level==='err'?'status-err':v.level==='warn'?'status-warn':'status-ok');
+      tdStatus.innerHTML = `<span class="${cls}">${sub.locked ? 'TERKUNCI ✓' : v.msg}</span>`;
+      lockBtn.disabled = !sub.locked && !v.ok;
+      if (isAlok && totalSpan) {
+        const total = sumAlok(sub, cfg);
+        if (total === cfg.wager) { totalSpan.className = 'alok-total ok';  totalSpan.textContent = `Total: ${total} ✓`; }
+        else if (cfg.maxPick != null && total === 0) { totalSpan.className = 'alok-total warn'; totalSpan.textContent = 'Total: 0 (tidak ikut)'; }
+        else { totalSpan.className = 'alok-total err'; totalSpan.textContent = `Total: ${total} ✗`; }
+      }
+    };
+    refreshRow();  // initial paint
 
     tbody.appendChild(tr);
   });
 
   table.appendChild(tbody);
   return table;
-}
-
-// re-render ringan untuk update status/validasi tanpa rebuild penuh
-function renderRowState(rk) {
-  // cara sederhana & aman: rebuild grid bagian (footer + tombol reveal)
-  render();
 }
 
 function renderFooter(rk) {
@@ -503,7 +656,13 @@ function renderFooter(rk) {
 function computeRow(rk, cfg, sub) {
   if (cfg.tipe === 'single') return scoreSingle(sub.pick, sub.wager, cfg);
   if (cfg.tipe === 'bonus')  return scoreBonus(sub.pick, sub.wager, cfg);
-  // Phase 2 belum dipakai di UI
+  if (cfg.tipe === 'trio')   return scoreTrio(sub.picks, sub.wager, cfg);
+  if (cfg.tipe === 'alokasi') {
+    // EDGE CASE R9: total 0 = tim tidak ikut -> JANGAN panggil scoreAlokasi (akan beri net -100).
+    if (cfg.maxPick != null && sumAlok(sub, cfg) === 0)
+      return { status:'TIDAK IKUT', net:0, cash:0, base:0, payout:0 };
+    return scoreAlokasi(buildAlok(sub, cfg), cfg);
+  }
   return { status:'-', net:0, cash:0 };
 }
 
@@ -521,10 +680,12 @@ function doReveal(rk) {
 }
 
 function statusBadge(status) {
-  if (status === 'MENANG') return '<span class="badge b-win">MENANG</span>';
-  if (status === 'KALAH')  return '<span class="badge b-lose">KALAH</span>';
-  if (status === 'NETRAL') return '<span class="badge b-neutral">NETRAL</span>';
-  if (status === 'SKIP')   return '<span class="badge b-skip">SKIP</span>';
+  if (status.includes('MENANG')) return `<span class="badge b-win">${status}</span>`;
+  if (status === 'KALAH')        return '<span class="badge b-lose">KALAH</span>';
+  if (status.includes('IMPAS'))  return `<span class="badge b-neutral">${status}</span>`;
+  if (status === 'NETRAL')       return '<span class="badge b-neutral">NETRAL</span>';
+  if (status === 'SKIP')         return '<span class="badge b-skip">SKIP</span>';
+  if (status === 'TIDAK IKUT')   return '<span class="badge b-skip">TIDAK IKUT</span>';
   return `<span class="badge b-skip">${status}</span>`;
 }
 function fmtNet(n) {
@@ -542,24 +703,54 @@ function renderReveal(rk, cfg) {
   const panel = document.createElement('div');
   panel.className = 'reveal-panel';
   const closeBtn = `<button class="close-reveal" id="closeReveal">Tutup Hasil</button>`;
-  let rows = '';
   const subs = state.rounds[rk].submissions;
-  subs.forEach((sub, i) => {
-    const r = computeRow(rk, cfg, sub);
-    const cashR = bulatRp5(r.cash);
-    rows += `<tr>
-      <td>${i+1}</td>
-      <td>${escapeHtml(state.teams[i])}</td>
-      <td>${sub.pick === 'SKIP' ? 'SKIP' : (sub.pick ? sub.pick + ' (' + cfg.opsi[sub.pick] + ')' : '-')}</td>
-      <td class="num">${sub.wager}</td>
-      <td>${statusBadge(r.status)}</td>
-      <td class="num">${fmtNet(r.net)}</td>
-      <td class="num">Rp ${cashR}</td>
-    </tr>`;
-  });
+  const tipe = cfg.tipe;
+  let head = '', rows = '';
+
+  if (tipe === 'trio') {
+    head = `<tr><th>#</th><th>Tim</th><th>Pilihan</th><th>Wager</th><th>Status</th><th>Cocok</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr>`;
+    subs.forEach((sub, i) => {
+      const r = computeRow(rk, cfg, sub);
+      const cashR = bulatRp5(r.cash);
+      const picksStr = sub.picks.slice().sort().map(p => `${p}·${cfg.opsi[p]}`).join(', ') || '-';
+      rows += `<tr>
+        <td>${i+1}</td><td>${escapeHtml(state.teams[i])}</td>
+        <td>${picksStr}</td><td class="num">${sub.wager}</td>
+        <td>${statusBadge(r.status)}</td><td class="num">${r.cocok}/3</td>
+        <td class="num">${fmtNet(r.net)}</td><td class="num">Rp ${cashR}</td></tr>`;
+    });
+  } else if (tipe === 'alokasi') {
+    head = `<tr><th>#</th><th>Tim</th><th>Alokasi</th><th>Status</th><th>Base</th><th>Payout</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr>`;
+    subs.forEach((sub, i) => {
+      const r = computeRow(rk, cfg, sub);
+      const cashR = bulatRp5(r.cash);
+      const alok = buildAlok(sub, cfg);
+      const alokStr = Object.keys(alok).map(t => `${t} ${alok[t]}`).join(', ') || '-';
+      const statusCell = (cfg.maxPick != null && sumAlok(sub, cfg) === 0) ? statusBadge('TIDAK IKUT') : '—';
+      rows += `<tr>
+        <td>${i+1}</td><td>${escapeHtml(state.teams[i])}</td>
+        <td>${alokStr}</td><td>${statusCell}</td>
+        <td class="num">${r.base}</td><td class="num">${r.payout}</td>
+        <td class="num">${fmtNet(r.net)}</td><td class="num">Rp ${cashR}</td></tr>`;
+    });
+  } else {
+    head = `<tr><th>#</th><th>Tim</th><th>Pick</th><th>Wager</th><th>Status</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr>`;
+    subs.forEach((sub, i) => {
+      const r = computeRow(rk, cfg, sub);
+      const cashR = bulatRp5(r.cash);
+      rows += `<tr>
+        <td>${i+1}</td>
+        <td>${escapeHtml(state.teams[i])}</td>
+        <td>${sub.pick === 'SKIP' ? 'SKIP' : (sub.pick ? sub.pick + ' (' + cfg.opsi[sub.pick] + ')' : '-')}</td>
+        <td class="num">${sub.wager}</td>
+        <td>${statusBadge(r.status)}</td>
+        <td class="num">${fmtNet(r.net)}</td>
+        <td class="num">Rp ${cashR}</td></tr>`;
+    });
+  }
   panel.innerHTML = `${closeBtn}<h3>Hasil ${rk} — ${phaseLabel(rk)}</h3>
     <table class="res">
-      <thead><tr><th>#</th><th>Tim</th><th>Pick</th><th>Wager</th><th>Status</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr></thead>
+      <thead>${head}</thead>
       <tbody>${rows}</tbody>
     </table>`;
   wrap.appendChild(panel);
