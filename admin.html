@@ -108,7 +108,13 @@
   table.grid .total { font-size: 11px; color: #777; white-space: nowrap; }
   table.grid .total b { color: #c9d4e0; }
 
-  .status-cell { font-size: 11px; white-space: nowrap; }
+  .status-cell { font-size: 11px; white-space: normal; min-width: 230px; }
+  .score-line { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .bank-instr { font-size: 11px; margin-top: 2px; line-height: 1.3; }
+  .instr-pay { color: #6fd989; }
+  .instr-lose { color: #ff7d6d; }
+  .instr-neutral { color: #d4d479; }
+  .instr-skip { color: #999; }
   .status-ok { color: #5fc77a; }
   .status-warn { color: #ffce5a; }
   .status-err { color: #ff6b5a; }
@@ -326,7 +332,7 @@ function defaultState() {
   for (const rk of ROUND_KEYS) {
     rounds[rk] = { submissions: [], revealed: false };
     for (let i = 0; i < NUM_TEAMS; i++) {
-      rounds[rk].submissions.push({ pick:'', picks:[], alokasi:{}, wager:0, locked:false, net:0, cash:0, timestamp:null });
+      rounds[rk].submissions.push({ pick:'', picks:[], alokasi:{}, wager:0, locked:false, status:'', net:0, cash:0, timestamp:null });
     }
   }
   return { teams, rounds, activeRound: 'R1', revealedPhases: [], auditLog: [] };
@@ -352,7 +358,7 @@ function loadState() {
               pick: s.pick || '',
               picks: Array.isArray(s.picks) ? s.picks.slice() : [],
               alokasi: (s.alokasi && typeof s.alokasi === 'object') ? Object.assign({}, s.alokasi) : {},
-              wager: +s.wager || 0, locked: !!s.locked,
+              wager: +s.wager || 0, locked: !!s.locked, status: s.status || '',
               net: +s.net || 0, cash: +s.cash || 0, timestamp: s.timestamp || null
             };
           }
@@ -363,6 +369,18 @@ function loadState() {
     // revealedPhases diturunkan dari flag .revealed agar selalu konsisten & migrasi state lama.
     d.revealedPhases = ROUND_KEYS.filter(rk => d.rounds[rk].revealed);
     d.auditLog = Array.isArray(parsed.auditLog) ? parsed.auditLog : [];
+    // Revisi 2 (single source of truth): recompute skor semua submission locked; kosongkan yang tidak.
+    for (const rk of ROUND_KEYS) {
+      const cfg = ROUND_CONFIG[rk];
+      d.rounds[rk].submissions.forEach(sub => {
+        if (sub.locked) {
+          const r = computeRow(rk, cfg, sub);
+          sub.net = r.net; sub.cash = r.cash; sub.status = r.status || '';
+        } else {
+          sub.net = 0; sub.cash = 0; sub.status = '';
+        }
+      });
+    }
     return d;
   } catch (e) {
     console.warn('Gagal load state, pakai default:', e);
@@ -418,12 +436,18 @@ function lockTeam(rk, i) {
   if (!validateSubmission(sub, cfg, rk).ok) return false;
   sub.locked = true;
   sub.timestamp = nowISO();
+  // Revisi 2: scoring otomatis saat lock (per tim) — simpan hasil ke submission
+  const r = computeRow(rk, cfg, sub);
+  sub.net = r.net;
+  sub.cash = r.cash;
+  sub.status = r.status || '';
+  const baru = Object.assign({}, subValue(sub, cfg), { status: sub.status, net: sub.net, cash: sub.cash });
   const key = rk + '#' + i;
   if (pendingOverride.has(key)) {
-    pushAudit('OVERRIDE', rk, state.teams[i], { lama: pendingOverride.get(key), baru: subValue(sub, cfg) });
+    pushAudit('OVERRIDE', rk, state.teams[i], { lama: pendingOverride.get(key), baru });
     pendingOverride.delete(key);
   } else {
-    pushAudit('INPUT', rk, state.teams[i], subValue(sub, cfg));
+    pushAudit('SCORE', rk, state.teams[i], baru);
   }
   return true;
 }
@@ -435,12 +459,11 @@ function unlockTeam(rk, i, withConfirm) {
   if (!sub.locked) return false;
   if (withConfirm && !confirm(`Buka kunci & edit ulang ${state.teams[i]} di ${rk}?`)) return false;
   const cfg = ROUND_CONFIG[rk];
-  pendingOverride.set(rk + '#' + i, subValue(sub, cfg));   // simpan nilai lama untuk audit OVERRIDE
+  // simpan nilai lama (termasuk skor) untuk audit OVERRIDE saat lock ulang
+  pendingOverride.set(rk + '#' + i, Object.assign({}, subValue(sub, cfg), { status: sub.status, net: sub.net, cash: sub.cash }));
+  // Revisi 2: kosongkan hasil score agar leaderboard berhenti menghitung baris ini
   sub.locked = false;
-  if (state.rounds[rk].revealed) {
-    state.rounds[rk].revealed = false;
-    state.revealedPhases = state.revealedPhases.filter(k => k !== rk);
-  }
+  sub.net = 0; sub.cash = 0; sub.status = '';
   return true;
 }
 
@@ -454,14 +477,12 @@ function lockAllValid() {
   if (any) { scheduleSave(); render(); }
 }
 
-// totalScore tim = Σ net presisi dari semua ronde yang sudah di-reveal
+// totalScore tim = Σ net presisi dari semua submission tim yang sudah locked+scored
 function teamTotalScore(teamIdx) {
   let total = 0;
   for (const rk of ROUND_KEYS) {
-    const r = state.rounds[rk];
-    if (r.revealed && r.submissions[teamIdx] && r.submissions[teamIdx].locked) {
-      total += r.submissions[teamIdx].net;
-    }
+    const sub = state.rounds[rk].submissions[teamIdx];
+    if (sub && sub.locked) total += sub.net;
   }
   return total;
 }
@@ -471,8 +492,6 @@ function teamTotalScore(teamIdx) {
 //   skorRanking = Σ net PRESISI (resmi, penentu juara; TIDAK terpengaruh Safety Net).
 //   kasBerjalan = uang fisik (mulai 500, += bulatRp5(net) per ronde, top-up ke 100 bila < 100).
 function hitungLeaderboard(st) {
-  const revealed = Array.isArray(st.revealedPhases) ? st.revealedPhases : [];
-  const revealedSet = new Set(revealed);
   const rows = [];
 
   for (let i = 0; i < NUM_TEAMS; i++) {
@@ -481,10 +500,11 @@ function hitungLeaderboard(st) {
     let totalWagerBenar = 0;
     let timestampPertama = null;
 
-    // skorRanking + netPerRonde + totalWagerBenar (atas ronde ter-reveal)
-    for (const fase of revealed) {
+    // skorRanking + netPerRonde + totalWagerBenar + timestampPertama
+    // sumber data: SEMUA submission tim yang locked+scored (lepas dari revealedPhases)
+    for (const fase of URUTAN_RONDE) {
       const sub = st.rounds[fase] && st.rounds[fase].submissions[i];
-      if (!sub) continue;
+      if (!sub || !sub.locked) continue;
       const net = sub.net || 0;
       skorRanking += net;
       netPerRonde[fase] = net;
@@ -492,22 +512,16 @@ function hitungLeaderboard(st) {
         const cfg = ROUND_CONFIG[fase];
         totalWagerBenar += (cfg.tipe === 'alokasi') ? 100 : (sub.wager || 0);
       }
-    }
-
-    // timestampPertama = lock paling awal tim (lintas semua ronde) untuk tiebreaker terakhir
-    for (const fase of URUTAN_RONDE) {
-      const sub = st.rounds[fase] && st.rounds[fase].submissions[i];
-      if (sub && sub.locked && sub.timestamp) {
-        if (timestampPertama === null || sub.timestamp < timestampPertama) timestampPertama = sub.timestamp;
+      if (sub.timestamp && (timestampPertama === null || sub.timestamp < timestampPertama)) {
+        timestampPertama = sub.timestamp;
       }
     }
 
-    // kasBerjalan + Safety Net: iterasi URUTAN_RONDE (berurutan!), hanya fase ter-reveal
+    // kasBerjalan + Safety Net: iterasi URUTAN_RONDE (berurutan!), hanya submission locked
     let kas = MODAL_AWAL, totalTopup = 0, safetyNetTriggered = false;
     for (const fase of URUTAN_RONDE) {
-      if (!revealedSet.has(fase)) continue;
       const sub = st.rounds[fase] && st.rounds[fase].submissions[i];
-      if (!sub) continue;
+      if (!sub || !sub.locked) continue;
       kas += bulatRp5(sub.net || 0);
       if (kas < SAFETY_FLOOR) {
         totalTopup += (SAFETY_FLOOR - kas);
@@ -573,6 +587,7 @@ function validateSubmission(sub, cfg, rk) {
   if (!Number.isFinite(w)) return { ok:false, level:'err', msg:'Wager bukan angka' };
   if (w < cfg.wagerMin || w > cfg.wagerMax)
     return { ok:false, level:'err', msg:`Wager harus ${cfg.wagerMin}–${cfg.wagerMax}` };
+  if (w % 5 !== 0) return { ok:false, level:'err', msg:'Wager harus kelipatan 5' };
 
   // soft warning: floor 20% x wagerMax
   if (w < 0.2 * cfg.wagerMax)
@@ -589,6 +604,7 @@ function validateTrio(sub, cfg) {
   if (!Number.isFinite(w)) return { ok:false, level:'err', msg:'Wager bukan angka' };
   if (w < cfg.wagerMin || w > cfg.wagerMax)
     return { ok:false, level:'err', msg:`Wager harus ${cfg.wagerMin}–${cfg.wagerMax}` };
+  if (w % 5 !== 0) return { ok:false, level:'err', msg:'Wager harus kelipatan 5' };
   if (w < 0.2 * cfg.wagerMax)
     return { ok:true, level:'warn', msg:`Wager rendah (<${Math.round(0.2*cfg.wagerMax)}) — boleh lock` };
   return { ok:true, level:'ok', msg:'Valid (3 dipilih)' };
@@ -635,9 +651,8 @@ const leaderboardEl = document.getElementById('leaderboard');
 const phaseLblEl = document.getElementById('phaseLbl');
 const revealBtn = document.getElementById('revealBtn');
 
-// transient (tidak dipersist): panel hasil mana yang sedang disembunyikan via "Tutup Hasil".
-// Menyembunyikan TIDAK membatalkan reveal — skor/leaderboard tetap utuh.
-const hiddenReveal = new Set();
+// transient (tidak dipersist): ronde mana yang panel Ringkasan Bankir-nya sedang dibuka.
+const summaryShown = new Set();
 
 function phaseLabel(rk) {
   const cfg = ROUND_CONFIG[rk];
@@ -663,16 +678,16 @@ function render() {
   phaseLblEl.textContent = phaseLabel(rk);
   renderSwitcher();
 
-  // REVEAL enabled hanya saat 10 tim sudah lock (berlaku semua tipe ronde)
-  revealBtn.disabled = !allTeamsLocked(rk);
-  revealBtn.textContent = state.rounds[rk].revealed ? 'REVEAL ✓' : 'REVEAL';
-  revealBtn.onclick = () => doReveal(rk);
+  // REVEAL non-gating: bisa diklik kapan saja untuk menampilkan ringkasan Bankir ronde aktif
+  revealBtn.disabled = false;
+  revealBtn.textContent = summaryShown.has(rk) ? 'REVEAL ✓' : 'REVEAL';
+  revealBtn.onclick = () => toggleSummary(rk);
 
   mainEl.innerHTML = '';
   mainEl.appendChild(renderInfoPanel(cfg));
   mainEl.appendChild(renderGrid(rk, cfg));
   mainEl.appendChild(renderFooter(rk));
-  if (state.rounds[rk].revealed && !hiddenReveal.has(rk)) mainEl.appendChild(renderReveal(rk, cfg));
+  if (summaryShown.has(rk)) mainEl.appendChild(renderSummary(rk, cfg));
 
   renderLeaderboard();
 }
@@ -811,7 +826,7 @@ function renderGrid(rk, cfg) {
     } else {
       const wInput = document.createElement('input');
       wInput.type = 'number'; wInput.value = sub.wager;
-      wInput.min = cfg.wagerMin; wInput.max = cfg.wagerMax;
+      wInput.min = cfg.wagerMin; wInput.max = cfg.wagerMax; wInput.step = 5;   // wager kelipatan 5 (range tetap)
       wInput.disabled = sub.locked || (isBonus && sub.pick === 'SKIP');
       wInput.oninput = () => {
         sub.wager = wInput.value === '' ? 0 : +wInput.value;
@@ -845,12 +860,21 @@ function renderGrid(rk, cfg) {
 
     // refresh ringan: update validasi/status tanpa rebuild input (caret aman)
     refreshRow = () => {
-      const v = validateSubmission(sub, cfg, rk);
-      tr.classList.toggle('row-err',  !sub.locked && v.level === 'err');
-      tr.classList.toggle('row-warn', !sub.locked && v.level === 'warn');
-      const cls = sub.locked ? 'status-ok' : (v.level==='err'?'status-err':v.level==='warn'?'status-warn':'status-ok');
-      tdStatus.innerHTML = `<span class="${cls}">${sub.locked ? 'TERKUNCI ✓' : v.msg}</span>`;
-      lockBtn.disabled = !sub.locked && !v.ok;
+      if (sub.locked) {
+        // Revisi 2: tampilkan hasil score inline (badge + net presisi + instruksi Bankir)
+        tr.classList.remove('row-err', 'row-warn');
+        const bl = bankerLine(rk, cfg, sub, state.teams[i]);
+        tdStatus.innerHTML = `<div class="score-line">${statusBadge(bl.badge)} ${fmtNet(bl.r.net)}</div>` +
+          `<div class="bank-instr ${bl.klass}">${escapeHtml(bl.instr)}</div>`;
+        lockBtn.disabled = false;
+      } else {
+        const v = validateSubmission(sub, cfg, rk);
+        tr.classList.toggle('row-err',  v.level === 'err');
+        tr.classList.toggle('row-warn', v.level === 'warn');
+        const cls = v.level==='err' ? 'status-err' : v.level==='warn' ? 'status-warn' : 'status-ok';
+        tdStatus.innerHTML = `<span class="${cls}">${v.msg}</span>`;
+        lockBtn.disabled = !v.ok;
+      }
       if (isAlok && totalSpan) {
         const total = sumAlok(sub, cfg);
         if (total === cfg.wager) { totalSpan.className = 'alok-total ok';  totalSpan.textContent = `Total: ${total} ✓`; }
@@ -889,30 +913,58 @@ function computeRow(rk, cfg, sub) {
   return { status:'-', net:0, cash:0 };
 }
 
-function doReveal(rk) {
-  const cfg = ROUND_CONFIG[rk];
-  if (!allTeamsLocked(rk)) return;
-  state.rounds[rk].submissions.forEach(sub => {
-    const r = computeRow(rk, cfg, sub);
-    sub.net = r.net;
-    sub.cash = r.cash;
-  });
-  state.rounds[rk].revealed = true;
-  if (!state.revealedPhases.includes(rk)) state.revealedPhases.push(rk);
-  hiddenReveal.delete(rk);   // re-reveal menampilkan kembali panel hasil
-  pushAudit('REVEAL', rk, 'ALL', { ronde: rk, tim: NUM_TEAMS });
-  doSave();
+// Revisi 2: REVEAL kini NON-GATING — toggle panel Ringkasan Bankir ronde aktif (tak menghitung apa pun).
+function toggleSummary(rk) {
+  if (summaryShown.has(rk)) {
+    summaryShown.delete(rk);
+  } else {
+    summaryShown.add(rk);
+    pushAudit('REVEAL', rk, 'ALL', { terlock: countLocked(rk) });
+  }
   render();
 }
 
 function statusBadge(status) {
   if (status.includes('MENANG')) return `<span class="badge b-win">${status}</span>`;
+  if (status === 'PAYOUT')       return '<span class="badge b-win">PAYOUT</span>';
   if (status === 'KALAH')        return '<span class="badge b-lose">KALAH</span>';
+  if (status === 'HANGUS')       return '<span class="badge b-lose">HANGUS</span>';
   if (status.includes('IMPAS'))  return `<span class="badge b-neutral">${status}</span>`;
   if (status === 'NETRAL')       return '<span class="badge b-neutral">NETRAL</span>';
   if (status === 'SKIP')         return '<span class="badge b-skip">SKIP</span>';
   if (status === 'TIDAK IKUT')   return '<span class="badge b-skip">TIDAK IKUT</span>';
   return `<span class="badge b-skip">${status}</span>`;
+}
+
+// angka presisi sebagai teks polos (untuk disisipkan ke instruksi)
+function numStr(n) { return Number.isInteger(n) ? String(n) : n.toFixed(2); }
+
+// Instruksi Bankir (STAKE MODEL) + badge untuk satu submission. Dipakai inline & di Ringkasan.
+function bankerLine(rk, cfg, sub, nama) {
+  const r = computeRow(rk, cfg, sub);
+  let instr, klass, badge;
+  if (r.status === 'TIDAK IKUT') {
+    instr = '⊘ Tidak ikut — tidak ada transaksi'; klass = 'instr-skip'; badge = 'TIDAK IKUT';
+  } else if (cfg.tipe === 'alokasi') {
+    const cashR = bulatRp5(r.cash);
+    if (cashR > 0) {
+      const ket = r.net >= 0 ? `untung Rp ${numStr(r.net)}` : `rugi Rp ${numStr(-r.net)}`;
+      instr = `✅ Bayar Rp ${cashR} ke ${nama} (${ket})`; klass = 'instr-pay'; badge = 'PAYOUT';
+    } else {
+      instr = '❌ Stake 100 hangus — tidak ada pembayaran'; klass = 'instr-lose'; badge = 'HANGUS';
+    }
+  } else if (r.status === 'SKIP') {
+    instr = '⊘ Tidak ada transaksi'; klass = 'instr-skip'; badge = 'SKIP';
+  } else if (r.status === 'NETRAL') {
+    instr = `➖ Kembalikan stake Rp ${sub.wager} (netral)`; klass = 'instr-neutral'; badge = 'NETRAL';
+  } else if (r.status.includes('IMPAS')) {
+    instr = `➖ Kembalikan stake Rp ${sub.wager} (impas)`; klass = 'instr-neutral'; badge = r.status;
+  } else if (r.status.includes('MENANG')) {
+    instr = `✅ Bayar Rp ${bulatRp5(r.cash)} ke ${nama}`; klass = 'instr-pay'; badge = r.status;
+  } else {
+    instr = `❌ Stake Rp ${sub.wager} hangus — tidak ada pembayaran`; klass = 'instr-lose'; badge = r.status || 'KALAH';
+  }
+  return { r, instr, klass, badge };
 }
 function fmtNet(n) {
   const sign = n > 0 ? '+' : '';
@@ -922,80 +974,30 @@ function fmtNet(n) {
   return `<span class="${cls}">${sign}${str}</span>`;
 }
 
-function renderReveal(rk, cfg) {
+// Revisi 2: panel ringkasan instruksi Bankir untuk ronde aktif — hanya tim yang SUDAH ter-lock.
+function renderSummary(rk, cfg) {
   const wrap = document.createElement('div');
-
-  // Panel hasil per tim
   const panel = document.createElement('div');
-  panel.className = 'reveal-panel';
-  const closeBtn = `<button class="close-reveal" id="closeReveal">Tutup Hasil</button>`;
+  panel.className = 'banker';
   const subs = state.rounds[rk].submissions;
-  const tipe = cfg.tipe;
-  let head = '', rows = '';
 
-  if (tipe === 'trio') {
-    head = `<tr><th>#</th><th>Tim</th><th>Pilihan</th><th>Wager</th><th>Status</th><th>Cocok</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr>`;
-    subs.forEach((sub, i) => {
-      const r = computeRow(rk, cfg, sub);
-      const cashR = bulatRp5(r.cash);
-      const picksStr = sub.picks.slice().sort().map(p => `${p}·${cfg.opsi[p]}`).join(', ') || '-';
-      rows += `<tr>
-        <td>${i+1}</td><td>${escapeHtml(state.teams[i])}</td>
-        <td>${picksStr}</td><td class="num">${sub.wager}</td>
-        <td>${statusBadge(r.status)}</td><td class="num">${r.cocok}/3</td>
-        <td class="num">${fmtNet(r.net)}</td><td class="num">Rp ${cashR}</td></tr>`;
-    });
-  } else if (tipe === 'alokasi') {
-    head = `<tr><th>#</th><th>Tim</th><th>Alokasi</th><th>Status</th><th>Base</th><th>Payout</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr>`;
-    subs.forEach((sub, i) => {
-      const r = computeRow(rk, cfg, sub);
-      const cashR = bulatRp5(r.cash);
-      const alok = buildAlok(sub, cfg);
-      const alokStr = Object.keys(alok).map(t => `${t} ${alok[t]}`).join(', ') || '-';
-      const statusCell = (cfg.maxPick != null && sumAlok(sub, cfg) === 0) ? statusBadge('TIDAK IKUT') : '—';
-      rows += `<tr>
-        <td>${i+1}</td><td>${escapeHtml(state.teams[i])}</td>
-        <td>${alokStr}</td><td>${statusCell}</td>
-        <td class="num">${r.base}</td><td class="num">${r.payout}</td>
-        <td class="num">${fmtNet(r.net)}</td><td class="num">Rp ${cashR}</td></tr>`;
-    });
-  } else {
-    head = `<tr><th>#</th><th>Tim</th><th>Pick</th><th>Wager</th><th>Status</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr>`;
-    subs.forEach((sub, i) => {
-      const r = computeRow(rk, cfg, sub);
-      const cashR = bulatRp5(r.cash);
-      rows += `<tr>
-        <td>${i+1}</td>
-        <td>${escapeHtml(state.teams[i])}</td>
-        <td>${sub.pick === 'SKIP' ? 'SKIP' : (sub.pick ? sub.pick + ' (' + cfg.opsi[sub.pick] + ')' : '-')}</td>
-        <td class="num">${sub.wager}</td>
-        <td>${statusBadge(r.status)}</td>
-        <td class="num">${fmtNet(r.net)}</td>
-        <td class="num">Rp ${cashR}</td></tr>`;
-    });
-  }
-  panel.innerHTML = `${closeBtn}<h3>Hasil ${rk} — ${phaseLabel(rk)}</h3>
-    <table class="res">
-      <thead>${head}</thead>
-      <tbody>${rows}</tbody>
-    </table>`;
-  wrap.appendChild(panel);
-
-  // Instruksi bankir: hanya cash > 0
-  const banker = document.createElement('div');
-  banker.className = 'banker';
-  let pays = '';
+  let lines = '', count = 0;
   subs.forEach((sub, i) => {
-    const r = computeRow(rk, cfg, sub);
-    const cashR = bulatRp5(r.cash);
-    if (cashR > 0) pays += `<div class="pay-line">Bayar <b>Rp ${cashR}</b> ke ${escapeHtml(state.teams[i])}</div>`;
+    if (!sub.locked) return;   // tim belum lock di-skip
+    count++;
+    const bl = bankerLine(rk, cfg, sub, state.teams[i]);
+    lines += `<div class="pay-line"><b>${escapeHtml(state.teams[i])}</b> → ` +
+             `<span class="${bl.klass}">${escapeHtml(bl.instr)}</span></div>`;
   });
-  banker.innerHTML = `<h3>Instruksi Bankir</h3>` + (pays || `<div class="none">Tidak ada pembayaran (semua cash = 0)</div>`);
-  wrap.appendChild(banker);
+
+  panel.innerHTML = `<button class="close-reveal" id="closeReveal">Tutup</button>` +
+    `<h3>Ringkasan Bankir — ${rk} (${count}/${NUM_TEAMS} ter-lock)</h3>` +
+    (lines || `<div class="none">Belum ada tim ter-lock di ronde ini.</div>`);
+  wrap.appendChild(panel);
 
   setTimeout(() => {
     const cb = document.getElementById('closeReveal');
-    if (cb) cb.onclick = () => { hiddenReveal.add(rk); render(); };   // sembunyikan panel saja; reveal & skor tetap
+    if (cb) cb.onclick = () => { summaryShown.delete(rk); render(); };
   }, 0);
 
   return wrap;
@@ -1008,10 +1010,8 @@ function escapeHtml(s) {
 /* ===================== LEADERBOARD PANEL (Phase 3) ===================== */
 function renderLeaderboard() {
   const rows = hitungLeaderboard(state);
-  const revealed = Array.isArray(state.revealedPhases) ? state.revealedPhases : [];
-  const isFinal = revealed.includes('BONUS');
-  const faseUrut = URUTAN_RONDE.filter(rk => revealed.includes(rk));
-  const faseLbl = faseUrut.length ? faseUrut.join(', ') : '(belum ada)';
+  // Revisi 2: final saat fase BONUS sudah 10 tim ter-lock+scored (lepas dari revealedPhases)
+  const isFinal = allTeamsLocked('BONUS');
 
   const judul = isFinal ? 'RANKING FINAL — Oracle of Lyndell' : 'LEADERBOARD SEMENTARA';
 
@@ -1047,7 +1047,7 @@ function renderLeaderboard() {
 
   leaderboardEl.innerHTML = `
     <h2 class="lb-title ${isFinal ? 'final' : ''}">${judul}</h2>
-    <div class="lb-sub">Berdasarkan ronde ter-reveal: ${faseLbl}</div>
+    <div class="lb-sub">Skor terkini dari semua input ter-lock.</div>
     ${top3}
     <table class="lb-table">
       <thead><tr><th>#</th><th>Tim</th><th>Skor</th><th>Kas</th><th>⚠</th></tr></thead>
@@ -1113,7 +1113,7 @@ function importJson(file) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
       state = loadState();                       // normalisasi + migrasi via merge defensif
-      hiddenReveal.clear();
+      summaryShown.clear();
       pendingOverride.clear();
       pushAudit('IMPORT', '', '', { teams: state.teams.length, file: file.name });
       doSave();
@@ -1132,7 +1132,7 @@ function resetSemua() {
   const ketik = prompt('Ketik HAPUS (huruf kapital) untuk konfirmasi reset:');
   if (ketik !== 'HAPUS') { alert('Reset dibatalkan.'); return; }
   state = defaultState();
-  hiddenReveal.clear();
+  summaryShown.clear();
   pendingOverride.clear();
   pushAudit('RESET', '', '', null);
   doSave();
@@ -1156,8 +1156,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'l') { e.preventDefault(); lockAllValid(); return; }
     if (k === 'r') {
       e.preventDefault();
-      const rk = state.activeRound;
-      if (allTeamsLocked(rk)) doReveal(rk);
+      toggleSummary(state.activeRound);   // non-gating
       return;
     }
     return;
