@@ -41,6 +41,27 @@
     font-weight: 700; font-size: 13px; cursor: pointer;
   }
   header .reveal-btn:disabled { background: #3a3f48; color: #777; cursor: not-allowed; }
+  header .hdr-actions { display: flex; align-items: center; gap: 6px; }
+  .hdr-btn {
+    background: #1f2530; color: #cfd6df; border: 1px solid #333a44; padding: 6px 10px;
+    border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .hdr-btn:hover { background: #283041; }
+  .hdr-btn.hdr-reset { color: #c98a8a; border-color: #4a3030; }
+  .hdr-btn.hdr-reset:hover { background: #341e1e; }
+
+  .hotkey-help {
+    position: fixed; top: 46px; right: 12px; z-index: 50;
+    background: #11141a; border: 1px solid #3a4150; border-radius: 6px;
+    padding: 10px 14px; font-size: 12px; color: #cfd6df; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .hotkey-help[hidden] { display: none; }
+  .hotkey-help b { color: #8fc0ff; margin-bottom: 2px; }
+  .hotkey-help kbd {
+    background: #222831; border: 1px solid #3a4150; border-radius: 3px;
+    padding: 1px 5px; font-size: 11px; font-family: inherit;
+  }
 
   /* BODY GRID */
   .body { display: grid; grid-template-columns: 130px 1fr 340px; height: 100%; overflow: hidden; }
@@ -190,8 +211,24 @@
     <span class="title">WP · ADMIN PANEL</span>
     <span class="phase-lbl" id="phaseLbl">—</span>
     <span class="saved" id="savedInd">Tersimpan ✓</span>
-    <button class="reveal-btn" id="revealBtn" disabled>REVEAL</button>
+    <div class="hdr-actions">
+      <button class="hdr-btn" id="helpBtn" title="Daftar hotkey">?</button>
+      <button class="hdr-btn" id="exportJsonBtn" title="Backup penuh ke file JSON (Ctrl+S)">⬇ JSON</button>
+      <button class="hdr-btn" id="importJsonBtn" title="Restore dari file JSON">⬆ JSON</button>
+      <button class="hdr-btn" id="exportCsvBtn" title="Export audit log ke CSV">⬇ CSV</button>
+      <button class="hdr-btn hdr-reset" id="resetBtn" title="Reset semua data (terproteksi)">Reset</button>
+      <button class="reveal-btn" id="revealBtn" disabled>REVEAL</button>
+      <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+    </div>
   </header>
+  <div class="hotkey-help" id="hotkeyHelp" hidden>
+    <b>Hotkeys</b>
+    <div><kbd>Enter</kbd> lock baris &amp; lompat ke baris berikut</div>
+    <div><kbd>Ctrl/⌘</kbd>+<kbd>L</kbd> lock semua baris yang valid</div>
+    <div><kbd>Ctrl/⌘</kbd>+<kbd>R</kbd> REVEAL ronde aktif (jika 10 locked)</div>
+    <div><kbd>Ctrl/⌘</kbd>+<kbd>S</kbd> Export Backup JSON</div>
+    <div><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> navigasi field</div>
+  </div>
   <div class="body">
     <nav class="switcher" id="switcher"></nav>
     <main class="main" id="main"></main>
@@ -292,7 +329,7 @@ function defaultState() {
       rounds[rk].submissions.push({ pick:'', picks:[], alokasi:{}, wager:0, locked:false, net:0, cash:0, timestamp:null });
     }
   }
-  return { teams, rounds, activeRound: 'R1', revealedPhases: [] };
+  return { teams, rounds, activeRound: 'R1', revealedPhases: [], auditLog: [] };
 }
 
 let state = loadState();
@@ -325,6 +362,7 @@ function loadState() {
     d.activeRound = ROUND_KEYS.includes(parsed.activeRound) ? parsed.activeRound : 'R1';
     // revealedPhases diturunkan dari flag .revealed agar selalu konsisten & migrasi state lama.
     d.revealedPhases = ROUND_KEYS.filter(rk => d.rounds[rk].revealed);
+    d.auditLog = Array.isArray(parsed.auditLog) ? parsed.auditLog : [];
     return d;
   } catch (e) {
     console.warn('Gagal load state, pakai default:', e);
@@ -348,6 +386,72 @@ function flashSaved() {
   const el = document.getElementById('savedInd');
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 900);
+}
+
+/* ===================== AUDIT + LOCK HELPERS (Phase 4) ===================== */
+// snapshot nilai lama saat unlock-edit, untuk audit OVERRIDE (lama -> baru). Transient.
+const pendingOverride = new Map();
+
+function nowISO() { return new Date().toISOString(); }
+
+function pushAudit(action, phase, team, value) {
+  if (!Array.isArray(state.auditLog)) state.auditLog = [];
+  state.auditLog.push({
+    ts: nowISO(), action, phase: phase || '', team: team || '',
+    value: value !== undefined ? value : null
+  });
+}
+
+// ringkasan submission untuk audit (per tipe ronde)
+function subValue(sub, cfg) {
+  if (cfg.tipe === 'trio')    return { picks: sub.picks.slice(), wager: sub.wager };
+  if (cfg.tipe === 'alokasi') return { alokasi: Object.assign({}, sub.alokasi) };
+  return { pick: sub.pick, wager: sub.wager };
+}
+
+// Lock 1 baris (validasi dulu). Audit INPUT, atau OVERRIDE bila baris ini sedang siklus edit.
+// return true bila berhasil lock. Caller yang save + render.
+function lockTeam(rk, i) {
+  const cfg = ROUND_CONFIG[rk];
+  const sub = state.rounds[rk].submissions[i];
+  if (sub.locked) return false;
+  if (!validateSubmission(sub, cfg, rk).ok) return false;
+  sub.locked = true;
+  sub.timestamp = nowISO();
+  const key = rk + '#' + i;
+  if (pendingOverride.has(key)) {
+    pushAudit('OVERRIDE', rk, state.teams[i], { lama: pendingOverride.get(key), baru: subValue(sub, cfg) });
+    pendingOverride.delete(key);
+  } else {
+    pushAudit('INPUT', rk, state.teams[i], subValue(sub, cfg));
+  }
+  return true;
+}
+
+// Unlock 1 baris untuk koreksi. withConfirm = minta konfirmasi operator.
+// Membatalkan reveal fase (Phase 3) sehingga REVEAL otomatis disabled lagi. Caller save + render.
+function unlockTeam(rk, i, withConfirm) {
+  const sub = state.rounds[rk].submissions[i];
+  if (!sub.locked) return false;
+  if (withConfirm && !confirm(`Buka kunci & edit ulang ${state.teams[i]} di ${rk}?`)) return false;
+  const cfg = ROUND_CONFIG[rk];
+  pendingOverride.set(rk + '#' + i, subValue(sub, cfg));   // simpan nilai lama untuk audit OVERRIDE
+  sub.locked = false;
+  if (state.rounds[rk].revealed) {
+    state.rounds[rk].revealed = false;
+    state.revealedPhases = state.revealedPhases.filter(k => k !== rk);
+  }
+  return true;
+}
+
+function lockAllValid() {
+  const rk = state.activeRound;
+  const cfg = ROUND_CONFIG[rk];
+  let any = false;
+  state.rounds[rk].submissions.forEach((sub, i) => {
+    if (!sub.locked && validateSubmission(sub, cfg, rk).ok && lockTeam(rk, i)) any = true;
+  });
+  if (any) { scheduleSave(); render(); }
 }
 
 // totalScore tim = Σ net presisi dari semua ronde yang sudah di-reveal
@@ -626,6 +730,7 @@ function renderGrid(rk, cfg) {
 
   state.rounds[rk].submissions.forEach((sub, i) => {
     const tr = document.createElement('tr');
+    tr.dataset.team = i;
     if (sub.locked) tr.classList.add('row-locked');
 
     // late-bound: handler input angka memanggil refreshRow() (di-assign di bawah)
@@ -725,21 +830,10 @@ function renderGrid(rk, cfg) {
     const tdAct = document.createElement('td');
     const lockBtn = document.createElement('button');
     lockBtn.className = 'lock-btn' + (sub.locked ? ' unlock' : '');
-    lockBtn.textContent = sub.locked ? 'UNLOCK' : 'LOCK';
+    lockBtn.textContent = sub.locked ? 'Unlock/Edit' : 'LOCK';
     lockBtn.onclick = () => {
-      if (sub.locked) {
-        sub.locked = false;
-        // unlock membatalkan reveal: keluarkan dari revealedPhases agar leaderboard ikut turun
-        if (state.rounds[rk].revealed) {
-          state.rounds[rk].revealed = false;
-          state.revealedPhases = state.revealedPhases.filter(k => k !== rk);
-        }
-      } else {
-        const v = validateSubmission(sub, cfg, rk);
-        if (!v.ok) return;
-        sub.locked = true; sub.timestamp = new Date().toISOString();
-      }
-      scheduleSave(); render();
+      const ok = sub.locked ? unlockTeam(rk, i, true) : lockTeam(rk, i);
+      if (ok) { scheduleSave(); render(); }
     };
     tdAct.appendChild(lockBtn); tr.appendChild(tdAct);
 
@@ -806,6 +900,7 @@ function doReveal(rk) {
   state.rounds[rk].revealed = true;
   if (!state.revealedPhases.includes(rk)) state.revealedPhases.push(rk);
   hiddenReveal.delete(rk);   // re-reveal menampilkan kembali panel hasil
+  pushAudit('REVEAL', rk, 'ALL', { ronde: rk, tim: NUM_TEAMS });
   doSave();
   render();
 }
@@ -961,6 +1056,139 @@ function renderLeaderboard() {
     <div class="lb-note">Skor = net presisi (resmi, penentu juara). Kas = uang fisik bankir (bulat Rp 5, termasuk Safety Net). Dua angka terlacak terpisah.</div>
   `;
 }
+
+/* ===================== EXPORT / IMPORT / RESET (Phase 4) ===================== */
+function stamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function downloadBlob(text, mime, filename) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Backup penuh: seluruh wp2-state -> file JSON.
+function exportJson() {
+  try {
+    downloadBlob(JSON.stringify(state, null, 2), 'application/json', `wp2-backup-${stamp()}.json`);
+  } catch (e) {
+    alert('Export gagal: ' + e.message);
+  }
+}
+
+// Audit log -> CSV (header: timestamp,action,phase,team,value).
+function exportCsv() {
+  const log = Array.isArray(state.auditLog) ? state.auditLog : [];
+  const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+  let csv = 'timestamp,action,phase,team,value\n';
+  for (const e of log) {
+    csv += [esc(e.ts), esc(e.action), esc(e.phase), esc(e.team), esc(JSON.stringify(e.value))].join(',') + '\n';
+  }
+  downloadBlob(csv, 'text/csv', `wp2-audit-${stamp()}.csv`);
+}
+
+// Restore dari file JSON (dengan guard konfirmasi).
+function importJson(file) {
+  const reader = new FileReader();
+  reader.onerror = () => alert('Gagal membaca file.');
+  reader.onload = () => {
+    let parsed;
+    try { parsed = JSON.parse(reader.result); }
+    catch (e) { alert('File tidak valid (gagal parse JSON).'); return; }
+
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.teams) || !parsed.rounds || typeof parsed.rounds !== 'object') {
+      alert('Struktur file tidak cocok (butuh field "teams" dan "rounds"). Import dibatalkan.');
+      return;
+    }
+    if (!confirm('Import akan MENGGANTI semua data saat ini. Lanjut?')) return;   // GUARD WAJIB
+
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+      state = loadState();                       // normalisasi + migrasi via merge defensif
+      hiddenReveal.clear();
+      pendingOverride.clear();
+      pushAudit('IMPORT', '', '', { teams: state.teams.length, file: file.name });
+      doSave();
+      render();
+      alert('Import berhasil.');
+    } catch (e) {
+      alert('Gagal import: ' + e.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Reset terproteksi dua lapis.
+function resetSemua() {
+  if (!confirm('Yakin reset SEMUA data? Ini menghapus seluruh input, reveal, dan audit log.')) return;
+  const ketik = prompt('Ketik HAPUS (huruf kapital) untuk konfirmasi reset:');
+  if (ketik !== 'HAPUS') { alert('Reset dibatalkan.'); return; }
+  state = defaultState();
+  hiddenReveal.clear();
+  pendingOverride.clear();
+  pushAudit('RESET', '', '', null);
+  doSave();
+  render();
+}
+
+/* ===================== HOTKEYS (Phase 4) ===================== */
+function focusRow(rk, i) {
+  if (i < 0 || i >= NUM_TEAMS) return;
+  const tr = mainEl.querySelector(`tr[data-team="${i}"]`);
+  if (!tr) return;
+  const f = tr.querySelector('select, input[type=number]');
+  if (f && !f.disabled) f.focus();
+}
+
+document.addEventListener('keydown', (e) => {
+  // Combo Ctrl/Cmd: aktif di mana saja (termasuk saat fokus di input)
+  if (e.ctrlKey || e.metaKey) {
+    const k = e.key.toLowerCase();
+    if (k === 's') { e.preventDefault(); exportJson(); return; }
+    if (k === 'l') { e.preventDefault(); lockAllValid(); return; }
+    if (k === 'r') {
+      e.preventDefault();
+      const rk = state.activeRound;
+      if (allTeamsLocked(rk)) doReveal(rk);
+      return;
+    }
+    return;
+  }
+
+  // Enter: lock baris tempat fokus berada, lalu lompat ke baris berikut
+  if (e.key === 'Enter') {
+    const tr = e.target.closest && e.target.closest('tr[data-team]');
+    if (tr && mainEl.contains(tr)) {
+      e.preventDefault();
+      const i = +tr.dataset.team;
+      const rk = state.activeRound;
+      if (lockTeam(rk, i)) { scheduleSave(); render(); focusRow(rk, i + 1); }
+    }
+  }
+});
+
+/* ===================== WIRING TOMBOL HEADER (Phase 4) ===================== */
+document.getElementById('exportJsonBtn').onclick = exportJson;
+document.getElementById('exportCsvBtn').onclick  = exportCsv;
+document.getElementById('resetBtn').onclick      = resetSemua;
+document.getElementById('importJsonBtn').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importFile').onchange   = (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (f) importJson(f);
+  e.target.value = '';   // reset agar memilih file sama lagi tetap memicu onchange
+};
+document.getElementById('helpBtn').onclick = () => {
+  const h = document.getElementById('hotkeyHelp');
+  h.hidden = !h.hidden;
+};
 
 /* ===================== INIT ===================== */
 render();
