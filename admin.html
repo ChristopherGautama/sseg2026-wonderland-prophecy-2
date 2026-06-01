@@ -43,7 +43,7 @@
   header .reveal-btn:disabled { background: #3a3f48; color: #777; cursor: not-allowed; }
 
   /* BODY GRID */
-  .body { display: grid; grid-template-columns: 130px 1fr; height: 100%; overflow: hidden; }
+  .body { display: grid; grid-template-columns: 130px 1fr 340px; height: 100%; overflow: hidden; }
 
   /* SWITCHER */
   .switcher {
@@ -147,6 +147,41 @@
   .banker .pay-line b { color: #ffd479; }
   .banker .none { color: #777; font-size: 12px; }
   .close-reveal { float: right; background: #333a44; color: #ccc; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+
+  /* LEADERBOARD (Phase 3) */
+  .leaderboard {
+    background: #11141a; border-left: 1px solid #2a2f38; padding: 10px 12px;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  }
+  .lb-title { margin: 0; font-size: 14px; color: #cfd6df; letter-spacing: .4px; }
+  .lb-title.final { color: #ffd479; font-size: 15px; }
+  .lb-sub { font-size: 11px; color: #8a93a0; }
+  .lb-note { font-size: 10px; color: #6a7280; line-height: 1.4; margin-top: 2px; }
+
+  .champs { display: flex; flex-direction: column; gap: 5px; }
+  .champ {
+    background: #181c23; border: 1px solid #2a2f38; border-radius: 6px; padding: 6px 10px;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .champ-1 { border-color: #b8902f; background: #221d10; }
+  .champ-2 { border-color: #7a8493; }
+  .champ-3 { border-color: #6b4a2f; }
+  .champ-gelar { font-size: 12px; font-weight: 700; color: #e6e6e6; white-space: nowrap; }
+  .champ-nama { font-size: 13px; color: #fff; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .champ-skor { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  table.lb-table { width: 100%; border-collapse: collapse; }
+  table.lb-table th {
+    text-align: left; font-size: 10px; color: #888; font-weight: 600; text-transform: uppercase;
+    padding: 4px 6px; border-bottom: 1px solid #2a2f38;
+  }
+  table.lb-table td { padding: 4px 6px; border-bottom: 1px solid #20242b; font-size: 12px; }
+  table.lb-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .lb-rank { color: #8a93a0; font-weight: 700; width: 22px; }
+  .lb-nama { color: #e6e6e6; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb-kas { color: #c9d4e0; }
+  .lb-sn { width: 20px; text-align: center; }
+  .sn-flag { color: #ffce5a; cursor: help; }
 </style>
 </head>
 <body>
@@ -160,6 +195,7 @@
   <div class="body">
     <nav class="switcher" id="switcher"></nav>
     <main class="main" id="main"></main>
+    <aside class="leaderboard" id="leaderboard"></aside>
   </div>
 </div>
 
@@ -192,6 +228,13 @@ const ROUND_CONFIG = {
   BONUS: { tipe:'bonus',   mult:2.5, wagerMin:50, wagerMax:200, kunci:'B',
            opsi:{A:'QULL', B:'NOCT', C:'SPYR', D:'PRPR'}, netral:['A'] },
 };
+
+// Phase 3: urutan kronologis ronde (untuk kas berjalan & Safety Net yang berurutan),
+// modal awal kas fisik, lantai Safety Net, dan urutan tiebreaker ranking.
+const URUTAN_RONDE    = ['R1','R2','R3','R4','R5','R6','R7','R8','R9','BONUS'];
+const MODAL_AWAL      = 500;
+const SAFETY_FLOOR    = 100;
+const URUTAN_TIEBREAK = ['R9','BONUS','R8','R7','R6','R5'];
 
 /* ===================== FUNGSI SCORING (pure) ===================== */
 // TIPE 1: SINGLE PICK (R1, R2, R3)
@@ -249,7 +292,7 @@ function defaultState() {
       rounds[rk].submissions.push({ pick:'', picks:[], alokasi:{}, wager:0, locked:false, net:0, cash:0, timestamp:null });
     }
   }
-  return { teams, rounds, activeRound: 'R1' };
+  return { teams, rounds, activeRound: 'R1', revealedPhases: [] };
 }
 
 let state = loadState();
@@ -280,6 +323,8 @@ function loadState() {
       }
     }
     d.activeRound = ROUND_KEYS.includes(parsed.activeRound) ? parsed.activeRound : 'R1';
+    // revealedPhases diturunkan dari flag .revealed agar selalu konsisten & migrasi state lama.
+    d.revealedPhases = ROUND_KEYS.filter(rk => d.rounds[rk].revealed);
     return d;
   } catch (e) {
     console.warn('Gagal load state, pakai default:', e);
@@ -315,6 +360,80 @@ function teamTotalScore(teamIdx) {
     }
   }
   return total;
+}
+
+/* ===================== LEADERBOARD (Phase 3) ===================== */
+// Recompute dari nol tiap dipanggil. DUA angka terpisah:
+//   skorRanking = Σ net PRESISI (resmi, penentu juara; TIDAK terpengaruh Safety Net).
+//   kasBerjalan = uang fisik (mulai 500, += bulatRp5(net) per ronde, top-up ke 100 bila < 100).
+function hitungLeaderboard(st) {
+  const revealed = Array.isArray(st.revealedPhases) ? st.revealedPhases : [];
+  const revealedSet = new Set(revealed);
+  const rows = [];
+
+  for (let i = 0; i < NUM_TEAMS; i++) {
+    let skorRanking = 0;
+    const netPerRonde = {};
+    let totalWagerBenar = 0;
+    let timestampPertama = null;
+
+    // skorRanking + netPerRonde + totalWagerBenar (atas ronde ter-reveal)
+    for (const fase of revealed) {
+      const sub = st.rounds[fase] && st.rounds[fase].submissions[i];
+      if (!sub) continue;
+      const net = sub.net || 0;
+      skorRanking += net;
+      netPerRonde[fase] = net;
+      if (net > 0) {
+        const cfg = ROUND_CONFIG[fase];
+        totalWagerBenar += (cfg.tipe === 'alokasi') ? 100 : (sub.wager || 0);
+      }
+    }
+
+    // timestampPertama = lock paling awal tim (lintas semua ronde) untuk tiebreaker terakhir
+    for (const fase of URUTAN_RONDE) {
+      const sub = st.rounds[fase] && st.rounds[fase].submissions[i];
+      if (sub && sub.locked && sub.timestamp) {
+        if (timestampPertama === null || sub.timestamp < timestampPertama) timestampPertama = sub.timestamp;
+      }
+    }
+
+    // kasBerjalan + Safety Net: iterasi URUTAN_RONDE (berurutan!), hanya fase ter-reveal
+    let kas = MODAL_AWAL, totalTopup = 0, safetyNetTriggered = false;
+    for (const fase of URUTAN_RONDE) {
+      if (!revealedSet.has(fase)) continue;
+      const sub = st.rounds[fase] && st.rounds[fase].submissions[i];
+      if (!sub) continue;
+      kas += bulatRp5(sub.net || 0);
+      if (kas < SAFETY_FLOOR) {
+        totalTopup += (SAFETY_FLOOR - kas);
+        kas = SAFETY_FLOOR;
+        safetyNetTriggered = true;
+      }
+    }
+
+    rows.push({
+      timId: i, nama: st.teams[i], skorRanking, netPerRonde, totalWagerBenar,
+      timestampPertama, kasBerjalan: kas, safetyNetTriggered, totalTopup
+    });
+  }
+
+  // tiebreaker berurutan
+  rows.sort((a, b) => {
+    if (b.skorRanking !== a.skorRanking) return b.skorRanking - a.skorRanking;
+    for (const fase of URUTAN_TIEBREAK) {
+      const av = a.netPerRonde[fase] || 0, bv = b.netPerRonde[fase] || 0;
+      if (bv !== av) return bv - av;
+    }
+    if (b.totalWagerBenar !== a.totalWagerBenar) return b.totalWagerBenar - a.totalWagerBenar;
+    // timestamp asc: yang lebih dulu lock menang; null (belum lock) ditaruh terakhir
+    if (a.timestampPertama === b.timestampPertama) return 0;
+    if (a.timestampPertama === null) return 1;
+    if (b.timestampPertama === null) return -1;
+    return a.timestampPertama < b.timestampPertama ? -1 : 1;
+  });
+
+  return rows;
 }
 
 /* ===================== HELPER ALOKASI ===================== */
@@ -408,8 +527,13 @@ function countLocked(rk) {
 /* ===================== RENDER ===================== */
 const switcherEl = document.getElementById('switcher');
 const mainEl = document.getElementById('main');
+const leaderboardEl = document.getElementById('leaderboard');
 const phaseLblEl = document.getElementById('phaseLbl');
 const revealBtn = document.getElementById('revealBtn');
+
+// transient (tidak dipersist): panel hasil mana yang sedang disembunyikan via "Tutup Hasil".
+// Menyembunyikan TIDAK membatalkan reveal — skor/leaderboard tetap utuh.
+const hiddenReveal = new Set();
 
 function phaseLabel(rk) {
   const cfg = ROUND_CONFIG[rk];
@@ -444,7 +568,9 @@ function render() {
   mainEl.appendChild(renderInfoPanel(cfg));
   mainEl.appendChild(renderGrid(rk, cfg));
   mainEl.appendChild(renderFooter(rk));
-  if (state.rounds[rk].revealed) mainEl.appendChild(renderReveal(rk, cfg));
+  if (state.rounds[rk].revealed && !hiddenReveal.has(rk)) mainEl.appendChild(renderReveal(rk, cfg));
+
+  renderLeaderboard();
 }
 
 function renderInfoPanel(cfg) {
@@ -603,8 +729,11 @@ function renderGrid(rk, cfg) {
     lockBtn.onclick = () => {
       if (sub.locked) {
         sub.locked = false;
-        // jika ronde sudah ter-reveal, unlock membatalkan reveal (skor presisi ikut dibatalkan)
-        if (state.rounds[rk].revealed) state.rounds[rk].revealed = false;
+        // unlock membatalkan reveal: keluarkan dari revealedPhases agar leaderboard ikut turun
+        if (state.rounds[rk].revealed) {
+          state.rounds[rk].revealed = false;
+          state.revealedPhases = state.revealedPhases.filter(k => k !== rk);
+        }
       } else {
         const v = validateSubmission(sub, cfg, rk);
         if (!v.ok) return;
@@ -675,6 +804,8 @@ function doReveal(rk) {
     sub.cash = r.cash;
   });
   state.rounds[rk].revealed = true;
+  if (!state.revealedPhases.includes(rk)) state.revealedPhases.push(rk);
+  hiddenReveal.delete(rk);   // re-reveal menampilkan kembali panel hasil
   doSave();
   render();
 }
@@ -769,7 +900,7 @@ function renderReveal(rk, cfg) {
 
   setTimeout(() => {
     const cb = document.getElementById('closeReveal');
-    if (cb) cb.onclick = () => { state.rounds[rk].revealed = false; scheduleSave(); render(); };
+    if (cb) cb.onclick = () => { hiddenReveal.add(rk); render(); };   // sembunyikan panel saja; reveal & skor tetap
   }, 0);
 
   return wrap;
@@ -777,6 +908,58 @@ function renderReveal(rk, cfg) {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ===================== LEADERBOARD PANEL (Phase 3) ===================== */
+function renderLeaderboard() {
+  const rows = hitungLeaderboard(state);
+  const revealed = Array.isArray(state.revealedPhases) ? state.revealedPhases : [];
+  const isFinal = revealed.includes('BONUS');
+  const faseUrut = URUTAN_RONDE.filter(rk => revealed.includes(rk));
+  const faseLbl = faseUrut.length ? faseUrut.join(', ') : '(belum ada)';
+
+  const judul = isFinal ? 'RANKING FINAL — Oracle of Lyndell' : 'LEADERBOARD SEMENTARA';
+
+  // Blok Top 3 (hanya saat final)
+  let top3 = '';
+  if (isFinal) {
+    const gelar = ['🥇 Oracle of Lyndell', '🥈 Juara 2', '🥉 Juara 3'];
+    top3 = '<div class="champs">';
+    for (let r = 0; r < Math.min(3, rows.length); r++) {
+      const t = rows[r];
+      top3 += `<div class="champ champ-${r+1}">
+        <div class="champ-gelar">${gelar[r]}</div>
+        <div class="champ-nama">${escapeHtml(t.nama)}</div>
+        <div class="champ-skor">${fmtNet(t.skorRanking)}</div>
+      </div>`;
+    }
+    top3 += '</div>';
+  }
+
+  // Tabel ranking
+  let trs = '';
+  rows.forEach((t, idx) => {
+    const warn = t.safetyNetTriggered
+      ? `<span class="sn-flag" title="Safety Net: +Rp ${t.totalTopup}">⚠</span>` : '';
+    trs += `<tr>
+      <td class="lb-rank">${idx + 1}</td>
+      <td class="lb-nama">${escapeHtml(t.nama)}</td>
+      <td class="num">${fmtNet(t.skorRanking)}</td>
+      <td class="num lb-kas">Rp ${t.kasBerjalan}</td>
+      <td class="lb-sn">${warn}</td>
+    </tr>`;
+  });
+
+  leaderboardEl.innerHTML = `
+    <h2 class="lb-title ${isFinal ? 'final' : ''}">${judul}</h2>
+    <div class="lb-sub">Berdasarkan ronde ter-reveal: ${faseLbl}</div>
+    ${top3}
+    <table class="lb-table">
+      <thead><tr><th>#</th><th>Tim</th><th>Skor</th><th>Kas</th><th>⚠</th></tr></thead>
+      <tbody>${trs}</tbody>
+    </table>
+    <div class="lb-note">Skor = net presisi (resmi, penentu juara). Kas = uang fisik bankir (bulat Rp 5, termasuk Safety Net). Dua angka terlacak terpisah.</div>
+  `;
 }
 
 /* ===================== INIT ===================== */
