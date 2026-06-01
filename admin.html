@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WP · Admin Panel</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    background: #1a1d21;
+    color: #e6e6e6;
+    overflow: hidden;
+  }
+  .app {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+  }
+
+  /* HEADER */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 14px;
+    background: #11141a;
+    border-bottom: 1px solid #2a2f38;
+  }
+  header .title { font-weight: 700; letter-spacing: .5px; font-size: 15px; color: #fff; }
+  header .phase-lbl {
+    background: #243042; color: #8fc0ff; padding: 3px 10px; border-radius: 4px;
+    font-weight: 600; font-size: 12px;
+  }
+  header .saved { font-size: 11px; color: #5fc77a; margin-left: auto; opacity: .35; transition: opacity .2s; }
+  header .saved.show { opacity: 1; }
+  header .reveal-btn {
+    background: #c8472b; color: #fff; border: none; padding: 7px 18px; border-radius: 5px;
+    font-weight: 700; font-size: 13px; cursor: pointer;
+  }
+  header .reveal-btn:disabled { background: #3a3f48; color: #777; cursor: not-allowed; }
+
+  /* BODY GRID */
+  .body { display: grid; grid-template-columns: 130px 1fr; height: 100%; overflow: hidden; }
+
+  /* SWITCHER */
+  .switcher {
+    background: #14171d; border-right: 1px solid #2a2f38; padding: 8px 6px;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+  }
+  .switcher button {
+    width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+    color: #b8b8b8; padding: 7px 9px; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: 600;
+  }
+  .switcher button:hover { background: #1f242c; }
+  .switcher button.active { background: #243042; color: #8fc0ff; border-color: #335; }
+  .switcher button.locked-dot::after { content: " ●"; color: #5fc77a; font-size: 10px; }
+
+  /* MAIN */
+  .main { padding: 10px 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+
+  .info-panel {
+    background: #14171d; border: 1px solid #2a2f38; border-radius: 6px; padding: 8px 12px;
+    display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: center;
+  }
+  .info-panel .pill { font-size: 12px; }
+  .info-panel .pill b { color: #8fc0ff; }
+  .info-panel .opts { color: #d0d0d0; font-size: 12px; }
+  .info-panel .opts code { background: #222831; padding: 1px 5px; border-radius: 3px; margin-right: 4px; color: #ffd479; }
+
+  /* GRID TIM */
+  table.grid { width: 100%; border-collapse: collapse; }
+  table.grid th {
+    text-align: left; font-size: 11px; color: #888; font-weight: 600; text-transform: uppercase;
+    padding: 4px 6px; border-bottom: 1px solid #2a2f38; letter-spacing: .4px;
+  }
+  table.grid td { padding: 4px 6px; border-bottom: 1px solid #20242b; vertical-align: middle; }
+  table.grid input[type=text], table.grid input[type=number], table.grid select {
+    background: #1d2128; border: 1px solid #333a44; color: #e6e6e6; border-radius: 4px;
+    padding: 5px 7px; font-size: 13px; width: 100%;
+  }
+  table.grid input[type=number] { width: 80px; }
+  table.grid select { cursor: pointer; }
+  table.grid .name-cell { width: 150px; }
+  table.grid .total { font-size: 11px; color: #777; white-space: nowrap; }
+  table.grid .total b { color: #c9d4e0; }
+
+  .status-cell { font-size: 11px; white-space: nowrap; }
+  .status-ok { color: #5fc77a; }
+  .status-warn { color: #ffce5a; }
+  .status-err { color: #ff6b5a; }
+  tr.row-err input[type=number] { border-color: #ff6b5a; background: #2a1a18; }
+  tr.row-warn input[type=number] { border-color: #ffce5a; }
+  tr.row-locked { opacity: .85; }
+  tr.row-locked input, tr.row-locked select { background: #181b21; color: #9aa3ad; }
+
+  .lock-btn {
+    background: #2f6b3a; color: #fff; border: none; padding: 5px 12px; border-radius: 4px;
+    font-size: 12px; font-weight: 600; cursor: pointer; min-width: 64px;
+  }
+  .lock-btn.unlock { background: #5a4520; color: #ffd479; }
+  .lock-btn:disabled { background: #3a3f48; color: #777; cursor: not-allowed; }
+
+  .grid-footer { font-size: 12px; color: #aaa; padding: 4px 6px; }
+  .grid-footer b { color: #5fc77a; }
+
+  .notbuilt {
+    display: flex; align-items: center; justify-content: center; height: 100%;
+    color: #777; font-size: 18px; font-weight: 600;
+  }
+
+  /* REVEAL PANEL */
+  .reveal-panel { background: #14171d; border: 1px solid #2a2f38; border-radius: 6px; padding: 10px 14px; }
+  .reveal-panel h3 { margin: 0 0 8px; font-size: 13px; color: #8fc0ff; }
+  table.res { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  table.res th { text-align: left; font-size: 11px; color: #888; padding: 3px 8px; border-bottom: 1px solid #2a2f38; }
+  table.res td { padding: 3px 8px; border-bottom: 1px solid #20242b; font-size: 13px; }
+  table.res td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { padding: 1px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; }
+  .b-win { background: #1e3a26; color: #6fd989; }
+  .b-lose { background: #3a1e1c; color: #ff7d6d; }
+  .b-neutral { background: #2a2f1c; color: #d4d479; }
+  .b-skip { background: #2a2d33; color: #999; }
+  .net-pos { color: #6fd989; }
+  .net-neg { color: #ff7d6d; }
+  .net-zero { color: #999; }
+  .banker { background: #11150f; border: 1px solid #2f4a2f; border-radius: 6px; padding: 10px 14px; }
+  .banker h3 { margin: 0 0 8px; font-size: 13px; color: #6fd989; }
+  .banker .pay-line { font-size: 14px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+  .banker .pay-line b { color: #ffd479; }
+  .banker .none { color: #777; font-size: 12px; }
+  .close-reveal { float: right; background: #333a44; color: #ccc; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <span class="title">WP · ADMIN PANEL</span>
+    <span class="phase-lbl" id="phaseLbl">—</span>
+    <span class="saved" id="savedInd">Tersimpan ✓</span>
+    <button class="reveal-btn" id="revealBtn" disabled>REVEAL</button>
+  </header>
+  <div class="body">
+    <nav class="switcher" id="switcher"></nav>
+    <main class="main" id="main"></main>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ===================== KONSTANTA ===================== */
+const ROUND_CONFIG = {
+  R1:    { tipe:'single',  mult:1.0, wagerMin:10, wagerMax:50,  kunci:'B',
+           opsi:{A:'Continuation Down', B:'Double Bottom', C:'Sideways'} },
+  R2:    { tipe:'single',  mult:1.0, wagerMin:20, wagerMax:100, kunci:'B',
+           opsi:{A:'SPYR', B:'NOCT', C:'PRPR', D:'RBBT'} },
+  R3:    { tipe:'single',  mult:1.2, wagerMin:20, wagerMax:100, kunci:'A',
+           opsi:{A:'SPYR', B:'NOCT', C:'QULL', D:'PRPR'} },
+  R4:    { tipe:'alokasi', mult:1.5, wager:100, minSaham:2, maxPerSaham:50,
+           outcome:{ SPYR:2.5, NOCT:0.5, QULL:1.0, MIRR:1.5, GRIN:0.5 } },
+  R5:    { tipe:'trio',    mult:1.5, wagerMin:30, wagerMax:150, trio:['A','B','C'] },
+  R6:    { tipe:'trio',    mult:1.8, wagerMin:30, wagerMax:150, trio:['A','B','C'] },
+  R7:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['A','C','E'] },
+  R8:    { tipe:'alokasi', mult:2.2, wager:100, minSaham:2, kelipatan:10,
+           outcome:{ RBBT:2.5, GRIN:1.5, NOCT:1.0, MIRR:0, SPYR:0 } },
+  R9:    { tipe:'alokasi', mult:2.5, wager:100, maxPick:2,
+           outcome:{ EVRG:2.0, HNPR:1.5, LRBK:1.1, MRRT:0 } },
+  BONUS: { tipe:'bonus',   mult:2.5, wagerMin:50, wagerMax:200, kunci:'B',
+           opsi:{A:'QULL', B:'NOCT', C:'SPYR', D:'PRPR'}, netral:['A'] },
+};
+
+/* ===================== FUNGSI SCORING (pure) ===================== */
+// TIPE 1: SINGLE PICK (R1, R2, R3)
+function scoreSingle(pick, wager, cfg) {
+  const benar = (pick === cfg.kunci);
+  const net   = benar ? +(wager * cfg.mult) : -wager;
+  const cash  = benar ?  wager * (1 + cfg.mult) : 0;
+  return { status: benar ? 'MENANG' : 'KALAH', net, cash };
+}
+
+// TIPE 1b: BONUS (single + opt-out + netral)
+// Aturan terkunci: pick 'SKIP' -> net 0, cash 0 (tidak pasang stake).
+//                  pick netral (QULL) -> net 0, cash = wager (stake DIKEMBALIKAN).
+function scoreBonus(pick, wager, cfg) {
+  if (pick === 'SKIP')           return { status:'SKIP',   net:0, cash:0 };
+  if (cfg.netral.includes(pick)) return { status:'NETRAL', net:0, cash:wager }; // stake balik
+  const benar = (pick === cfg.kunci);
+  const net   = benar ? +(wager * cfg.mult) : -wager;
+  const cash  = benar ?  wager * (1 + cfg.mult) : 0;
+  return { status: benar ? 'MENANG' : 'KALAH', net, cash };
+}
+
+// TIPE 2: TRIO 3-of-6 (R5, R6, R7) -- dipakai Phase 2
+function scoreTrio(picks, wager, cfg) {
+  const cocok = picks.filter(p => cfg.trio.includes(p)).length;
+  if (cocok === 3) return { status:'3/3 MENANG', cocok, net:+(wager*cfg.mult), cash:wager*(1+cfg.mult) };
+  if (cocok === 2) return { status:'2/3 IMPAS',  cocok, net:0,                 cash:wager }; // stake balik
+  return            { status:'KALAH',            cocok, net:-wager,            cash:0 };
+}
+
+// TIPE 3: ALOKASI (R4, R8, R9) -- dipakai Phase 2
+function scoreAlokasi(alokasi, cfg) {
+  let base = 0;
+  for (const t in alokasi) base += alokasi[t] * (cfg.outcome[t] || 0);
+  const payout = base * cfg.mult;
+  const net    = payout - 100;
+  return { base, payout, net, cash: payout };
+}
+
+// Pembulatan kas fisik (skor presisi tetap disimpan untuk ranking)
+const bulatRp5 = (x) => Math.round(x / 5) * 5;
+
+/* ===================== STATE ===================== */
+const STORAGE_KEY = 'wp2-state';
+const ROUND_KEYS = Object.keys(ROUND_CONFIG);            // R1..R9, BONUS
+const PHASE1_ROUNDS = ['R1','R2','R3','BONUS'];          // berfungsi penuh di Phase 1
+const NUM_TEAMS = 10;
+
+function defaultState() {
+  const teams = [];
+  for (let i = 0; i < NUM_TEAMS; i++) teams.push('Tim ' + (i + 1));
+  const rounds = {};
+  for (const rk of ROUND_KEYS) {
+    rounds[rk] = { submissions: [], revealed: false };
+    for (let i = 0; i < NUM_TEAMS; i++) {
+      rounds[rk].submissions.push({ pick:'', wager:0, locked:false, net:0, cash:0, timestamp:null });
+    }
+  }
+  return { teams, rounds, activeRound: 'R1' };
+}
+
+let state = loadState();
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    // merge defensif supaya tahan terhadap struktur lama
+    const d = defaultState();
+    d.teams = Array.isArray(parsed.teams) && parsed.teams.length === NUM_TEAMS ? parsed.teams : d.teams;
+    if (parsed.rounds) {
+      for (const rk of ROUND_KEYS) {
+        if (parsed.rounds[rk] && Array.isArray(parsed.rounds[rk].submissions)) {
+          d.rounds[rk].revealed = !!parsed.rounds[rk].revealed;
+          for (let i = 0; i < NUM_TEAMS; i++) {
+            const s = parsed.rounds[rk].submissions[i];
+            if (s) d.rounds[rk].submissions[i] = {
+              pick: s.pick || '', wager: +s.wager || 0, locked: !!s.locked,
+              net: +s.net || 0, cash: +s.cash || 0, timestamp: s.timestamp || null
+            };
+          }
+        }
+      }
+    }
+    d.activeRound = ROUND_KEYS.includes(parsed.activeRound) ? parsed.activeRound : 'R1';
+    return d;
+  } catch (e) {
+    console.warn('Gagal load state, pakai default:', e);
+    return defaultState();
+  }
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSave, 500);
+}
+function doSave() {
+  saveTimer = null;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    flashSaved();
+  } catch (e) { console.warn('Gagal save:', e); }
+}
+function flashSaved() {
+  const el = document.getElementById('savedInd');
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 900);
+}
+
+// totalScore tim = Σ net presisi dari semua ronde yang sudah di-reveal
+function teamTotalScore(teamIdx) {
+  let total = 0;
+  for (const rk of ROUND_KEYS) {
+    const r = state.rounds[rk];
+    if (r.revealed && r.submissions[teamIdx] && r.submissions[teamIdx].locked) {
+      total += r.submissions[teamIdx].net;
+    }
+  }
+  return total;
+}
+
+/* ===================== VALIDASI ===================== */
+// return {ok, level:'ok'|'warn'|'err', msg}
+function validateSubmission(sub, cfg, rk) {
+  const isBonus = cfg.tipe === 'bonus';
+  // SKIP pada bonus selalu valid
+  if (isBonus && sub.pick === 'SKIP') return { ok:true, level:'ok', msg:'SKIP — wager 0' };
+
+  if (!sub.pick) return { ok:false, level:'err', msg:'Pick wajib dipilih' };
+
+  const w = +sub.wager;
+  if (!Number.isFinite(w)) return { ok:false, level:'err', msg:'Wager bukan angka' };
+  if (w < cfg.wagerMin || w > cfg.wagerMax)
+    return { ok:false, level:'err', msg:`Wager harus ${cfg.wagerMin}–${cfg.wagerMax}` };
+
+  // soft warning: floor 20% x wagerMax
+  if (w < 0.2 * cfg.wagerMax)
+    return { ok:true, level:'warn', msg:`Wager rendah (<${Math.round(0.2*cfg.wagerMax)}) — boleh lock` };
+
+  return { ok:true, level:'ok', msg:'Valid' };
+}
+
+function allTeamsLocked(rk) {
+  return state.rounds[rk].submissions.every(s => s.locked);
+}
+function countLocked(rk) {
+  return state.rounds[rk].submissions.filter(s => s.locked).length;
+}
+
+/* ===================== RENDER ===================== */
+const switcherEl = document.getElementById('switcher');
+const mainEl = document.getElementById('main');
+const phaseLblEl = document.getElementById('phaseLbl');
+const revealBtn = document.getElementById('revealBtn');
+
+function phaseLabel(rk) {
+  const cfg = ROUND_CONFIG[rk];
+  const tipeNama = { single:'Single', bonus:'Bonus', trio:'Trio', alokasi:'Alokasi' }[cfg.tipe];
+  return `${rk} · ${tipeNama} ×${cfg.mult}`;
+}
+
+function renderSwitcher() {
+  switcherEl.innerHTML = '';
+  for (const rk of ROUND_KEYS) {
+    const btn = document.createElement('button');
+    btn.textContent = rk;
+    if (rk === state.activeRound) btn.classList.add('active');
+    if (PHASE1_ROUNDS.includes(rk) && allTeamsLocked(rk)) btn.classList.add('locked-dot');
+    btn.onclick = () => { state.activeRound = rk; scheduleSave(); render(); };
+    switcherEl.appendChild(btn);
+  }
+}
+
+function render() {
+  const rk = state.activeRound;
+  const cfg = ROUND_CONFIG[rk];
+  phaseLblEl.textContent = phaseLabel(rk);
+  renderSwitcher();
+
+  // header reveal button -> hanya relevan untuk fase Phase 1
+  const built = PHASE1_ROUNDS.includes(rk);
+  revealBtn.disabled = !(built && allTeamsLocked(rk));
+  revealBtn.textContent = state.rounds[rk].revealed ? 'REVEAL ✓' : 'REVEAL';
+  revealBtn.onclick = () => doReveal(rk);
+
+  mainEl.innerHTML = '';
+  if (!built) {
+    const div = document.createElement('div');
+    div.className = 'notbuilt';
+    div.textContent = 'Belum dibangun (Phase 2)';
+    mainEl.appendChild(div);
+    return;
+  }
+
+  mainEl.appendChild(renderInfoPanel(cfg));
+  mainEl.appendChild(renderGrid(rk, cfg));
+  mainEl.appendChild(renderFooter(rk));
+  if (state.rounds[rk].revealed) mainEl.appendChild(renderReveal(rk, cfg));
+}
+
+function renderInfoPanel(cfg) {
+  const p = document.createElement('div');
+  p.className = 'info-panel';
+  const tipeNama = { single:'Single Pick', bonus:'Bonus (opt-out + netral)' }[cfg.tipe] || cfg.tipe;
+  let html = `<span class="pill">Tipe: <b>${tipeNama}</b></span>`;
+  html += `<span class="pill">Multiplier: <b>×${cfg.mult}</b></span>`;
+  html += `<span class="pill">Wager: <b>${cfg.wagerMin}–${cfg.wagerMax}</b></span>`;
+  html += `<span class="pill">Kunci: <b>${cfg.kunci}</b></span>`;
+  if (cfg.tipe === 'bonus') html += `<span class="pill">Netral: <b>${cfg.netral.join(',')}</b></span>`;
+  let opts = '<span class="opts">';
+  for (const k in cfg.opsi) opts += `<code>${k}=${cfg.opsi[k]}</code>`;
+  opts += '</span>';
+  p.innerHTML = html + opts;
+  return p;
+}
+
+function renderGrid(rk, cfg) {
+  const table = document.createElement('table');
+  table.className = 'grid';
+  const isBonus = cfg.tipe === 'bonus';
+  table.innerHTML = `<thead><tr>
+    <th>#</th><th>Nama Tim</th><th>Pick</th><th>Wager</th><th>Status</th><th>Aksi</th><th>Total</th>
+  </tr></thead>`;
+  const tbody = document.createElement('tbody');
+
+  state.rounds[rk].submissions.forEach((sub, i) => {
+    const tr = document.createElement('tr');
+    const val = validateSubmission(sub, cfg, rk);
+    if (!sub.locked) {
+      if (val.level === 'err') tr.classList.add('row-err');
+      else if (val.level === 'warn') tr.classList.add('row-warn');
+    }
+    if (sub.locked) tr.classList.add('row-locked');
+
+    // #
+    const tdNum = document.createElement('td'); tdNum.textContent = (i+1); tr.appendChild(tdNum);
+
+    // Nama tim
+    const tdName = document.createElement('td'); tdName.className = 'name-cell';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text'; nameInput.value = state.teams[i];
+    nameInput.oninput = () => { state.teams[i] = nameInput.value; scheduleSave(); };
+    tdName.appendChild(nameInput); tr.appendChild(tdName);
+
+    // Pick
+    const tdPick = document.createElement('td');
+    const sel = document.createElement('select');
+    sel.disabled = sub.locked;
+    const blank = document.createElement('option'); blank.value=''; blank.textContent='— pilih —'; sel.appendChild(blank);
+    for (const k in cfg.opsi) {
+      const o = document.createElement('option'); o.value = k; o.textContent = `${k} (${cfg.opsi[k]})`; sel.appendChild(o);
+    }
+    if (isBonus) { const o = document.createElement('option'); o.value='SKIP'; o.textContent='SKIP'; sel.appendChild(o); }
+    sel.value = sub.pick;
+    sel.onchange = () => {
+      sub.pick = sel.value;
+      if (isBonus && sub.pick === 'SKIP') { sub.wager = 0; }
+      scheduleSave(); renderRowState(rk);
+    };
+    tdPick.appendChild(sel); tr.appendChild(tdPick);
+
+    // Wager
+    const tdWager = document.createElement('td');
+    const wInput = document.createElement('input');
+    wInput.type = 'number'; wInput.value = sub.wager;
+    wInput.min = cfg.wagerMin; wInput.max = cfg.wagerMax;
+    const wagerDisabled = sub.locked || (isBonus && sub.pick === 'SKIP');
+    wInput.disabled = wagerDisabled;
+    wInput.oninput = () => { sub.wager = wInput.value === '' ? 0 : +wInput.value; scheduleSave(); renderRowState(rk); };
+    tdWager.appendChild(wInput); tr.appendChild(tdWager);
+
+    // Status
+    const tdStatus = document.createElement('td');
+    tdStatus.className = 'status-cell';
+    const cls = sub.locked ? 'status-ok' : (val.level==='err'?'status-err':val.level==='warn'?'status-warn':'status-ok');
+    tdStatus.innerHTML = `<span class="${cls}">${sub.locked ? 'TERKUNCI ✓' : val.msg}</span>`;
+    tr.appendChild(tdStatus);
+
+    // Aksi (lock/unlock)
+    const tdAct = document.createElement('td');
+    const lockBtn = document.createElement('button');
+    lockBtn.className = 'lock-btn' + (sub.locked ? ' unlock' : '');
+    lockBtn.textContent = sub.locked ? 'UNLOCK' : 'LOCK';
+    if (!sub.locked && !val.ok) lockBtn.disabled = true;
+    lockBtn.onclick = () => {
+      if (sub.locked) {
+        sub.locked = false;
+        // jika ronde sudah ter-reveal, unlock membatalkan reveal (skor presisi ikut dibatalkan)
+        if (state.rounds[rk].revealed) state.rounds[rk].revealed = false;
+      } else {
+        const v = validateSubmission(sub, cfg, rk);
+        if (!v.ok) return;
+        sub.locked = true; sub.timestamp = new Date().toISOString();
+      }
+      scheduleSave(); render();
+    };
+    tdAct.appendChild(lockBtn); tr.appendChild(tdAct);
+
+    // Total skor (akumulasi lintas ronde, net presisi)
+    const tdTotal = document.createElement('td');
+    tdTotal.className = 'total';
+    const ts = teamTotalScore(i);
+    tdTotal.innerHTML = `Σ <b>${fmtNet(ts)}</b>`;
+    tr.appendChild(tdTotal);
+
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  return table;
+}
+
+// re-render ringan untuk update status/validasi tanpa rebuild penuh
+function renderRowState(rk) {
+  // cara sederhana & aman: rebuild grid bagian (footer + tombol reveal)
+  render();
+}
+
+function renderFooter(rk) {
+  const f = document.createElement('div');
+  f.className = 'grid-footer';
+  const n = countLocked(rk);
+  f.innerHTML = `<b>${n}</b> / ${NUM_TEAMS} locked`;
+  return f;
+}
+
+/* ===================== REVEAL ===================== */
+function computeRow(rk, cfg, sub) {
+  if (cfg.tipe === 'single') return scoreSingle(sub.pick, sub.wager, cfg);
+  if (cfg.tipe === 'bonus')  return scoreBonus(sub.pick, sub.wager, cfg);
+  // Phase 2 belum dipakai di UI
+  return { status:'-', net:0, cash:0 };
+}
+
+function doReveal(rk) {
+  const cfg = ROUND_CONFIG[rk];
+  if (!allTeamsLocked(rk)) return;
+  state.rounds[rk].submissions.forEach(sub => {
+    const r = computeRow(rk, cfg, sub);
+    sub.net = r.net;
+    sub.cash = r.cash;
+  });
+  state.rounds[rk].revealed = true;
+  doSave();
+  render();
+}
+
+function statusBadge(status) {
+  if (status === 'MENANG') return '<span class="badge b-win">MENANG</span>';
+  if (status === 'KALAH')  return '<span class="badge b-lose">KALAH</span>';
+  if (status === 'NETRAL') return '<span class="badge b-neutral">NETRAL</span>';
+  if (status === 'SKIP')   return '<span class="badge b-skip">SKIP</span>';
+  return `<span class="badge b-skip">${status}</span>`;
+}
+function fmtNet(n) {
+  const sign = n > 0 ? '+' : '';
+  const cls = n > 0 ? 'net-pos' : n < 0 ? 'net-neg' : 'net-zero';
+  // tampilkan presisi: hilangkan trailing .0 jika integer
+  const str = Number.isInteger(n) ? n.toString() : n.toFixed(2);
+  return `<span class="${cls}">${sign}${str}</span>`;
+}
+
+function renderReveal(rk, cfg) {
+  const wrap = document.createElement('div');
+
+  // Panel hasil per tim
+  const panel = document.createElement('div');
+  panel.className = 'reveal-panel';
+  const closeBtn = `<button class="close-reveal" id="closeReveal">Tutup Hasil</button>`;
+  let rows = '';
+  const subs = state.rounds[rk].submissions;
+  subs.forEach((sub, i) => {
+    const r = computeRow(rk, cfg, sub);
+    const cashR = bulatRp5(r.cash);
+    rows += `<tr>
+      <td>${i+1}</td>
+      <td>${escapeHtml(state.teams[i])}</td>
+      <td>${sub.pick === 'SKIP' ? 'SKIP' : (sub.pick ? sub.pick + ' (' + cfg.opsi[sub.pick] + ')' : '-')}</td>
+      <td class="num">${sub.wager}</td>
+      <td>${statusBadge(r.status)}</td>
+      <td class="num">${fmtNet(r.net)}</td>
+      <td class="num">Rp ${cashR}</td>
+    </tr>`;
+  });
+  panel.innerHTML = `${closeBtn}<h3>Hasil ${rk} — ${phaseLabel(rk)}</h3>
+    <table class="res">
+      <thead><tr><th>#</th><th>Tim</th><th>Pick</th><th>Wager</th><th>Status</th><th>Net (ranking)</th><th>Cash (Rp5)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  wrap.appendChild(panel);
+
+  // Instruksi bankir: hanya cash > 0
+  const banker = document.createElement('div');
+  banker.className = 'banker';
+  let pays = '';
+  subs.forEach((sub, i) => {
+    const r = computeRow(rk, cfg, sub);
+    const cashR = bulatRp5(r.cash);
+    if (cashR > 0) pays += `<div class="pay-line">Bayar <b>Rp ${cashR}</b> ke ${escapeHtml(state.teams[i])}</div>`;
+  });
+  banker.innerHTML = `<h3>Instruksi Bankir</h3>` + (pays || `<div class="none">Tidak ada pembayaran (semua cash = 0)</div>`);
+  wrap.appendChild(banker);
+
+  setTimeout(() => {
+    const cb = document.getElementById('closeReveal');
+    if (cb) cb.onclick = () => { state.rounds[rk].revealed = false; scheduleSave(); render(); };
+  }, 0);
+
+  return wrap;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/* ===================== INIT ===================== */
+render();
+</script>
+</body>
+</html>
