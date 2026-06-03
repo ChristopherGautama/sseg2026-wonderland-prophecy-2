@@ -247,29 +247,29 @@
 
 /* ===================== KONSTANTA ===================== */
 const ROUND_CONFIG = {
-  R1:    { tipe:'single',  mult:1.0, wagerMin:10, wagerMax:50,  kunci:'B',
-           opsi:{A:'Continuation Down', B:'Double Bottom', C:'Sideways'} },
-  R2:    { tipe:'single',  mult:1.0, wagerMin:20, wagerMax:100, kunci:'B',
-           opsi:{A:'SPYR', B:'NOCT', C:'PRPR', D:'RBBT'} },
-  R3:    { tipe:'single',  mult:1.2, wagerMin:20, wagerMax:100, kunci:'A',
-           opsi:{A:'SPYR', B:'NOCT', C:'QULL', D:'PRPR'} },
+  R1:    { tipe:'single',  mult:1.0, wagerMin:10, wagerMax:50,  kunci:'C',
+           opsi:{A:'Continuation Down', B:'Sideways', C:'Double Bottom'} },
+  R2:    { tipe:'single',  mult:1.0, wagerMin:20, wagerMax:100, kunci:'D',
+           opsi:{A:'SPYR', B:'PRPR', C:'RBBT', D:'NOCT'} },
+  R3:    { tipe:'single',  mult:1.5, wagerMin:20, wagerMax:100, kunci:'B',
+           opsi:{A:'QULL', B:'SPYR', C:'PRPR', D:'NOCT'} },
   R4:    { tipe:'alokasi', mult:1.5, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
-           slot:{A:'SPYR', B:'NOCT', C:'QULL', D:'MIRR', E:'GRIN'},
-           outcome:{ SPYR:2.5, NOCT:0.5, QULL:1.0, MIRR:1.5, GRIN:0.5 } },
-  R5:    { tipe:'trio',    mult:1.5, wagerMin:30, wagerMax:150, trio:['A','B','C'],
-           opsi:{A:'Gold', B:'Cash', C:'Gov Bond', D:'Deposito', E:'Bitcoin', F:'Index'} },
-  R6:    { tipe:'trio',    mult:1.8, wagerMin:30, wagerMax:150, trio:['A','B','C'],
-           opsi:{A:'CSTR', B:'RBBT', C:'LUMN', D:'SPYR', E:'QULL', F:'MIRR'} },
-  R7:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['A','C','E'],
-           opsi:{A:'QULL', B:'MIRR', C:'NOCT', D:'SPYR', E:'GRIN', F:'TARO'} },
-  R8:    { tipe:'alokasi', mult:2.2, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
-           slot:{A:'RBBT', B:'GRIN', C:'NOCT', D:'MIRR', E:'SPYR'},
-           outcome:{ RBBT:2.5, GRIN:1.5, NOCT:1.0, MIRR:0, SPYR:0 } },
+           slot:{A:'NOCT', B:'SPYR', C:'GRIN', D:'MIRR', E:'QULL'},
+           outcome:{ NOCT:0.5, SPYR:2.5, GRIN:0.5, MIRR:1.5, QULL:1.0 } },
+  R5:    { tipe:'trio',    mult:1.5, wagerMin:30, wagerMax:150, trio:['B','D','F'],
+           opsi:{A:'Deposito', B:'Gold', C:'Bitcoin', D:'Cash', E:'Index', F:'Gov Bond'} },
+  R6:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['A','C','E'],
+           opsi:{A:'CSTR', B:'SPYR', C:'RBBT', D:'QULL', E:'LUMN', F:'MIRR'} },
+  R7:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['B','C','E'],
+           opsi:{A:'MIRR', B:'QULL', C:'NOCT', D:'SPYR', E:'GRIN', F:'TARO'} },
+  R8:    { tipe:'alokasi', mult:2.0, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
+           slot:{A:'MIRR', B:'RBBT', C:'SPYR', D:'GRIN', E:'NOCT'},
+           outcome:{ MIRR:0, RBBT:2.5, SPYR:0, GRIN:1.5, NOCT:1.0 } },
   R9:    { tipe:'alokasi', mult:2.5, wager:100, maxPick:2, kelipatan:10,
-           slot:{A:'EVRG', B:'HNPR', C:'LRBK', D:'MRRT'},
-           outcome:{ EVRG:2.0, HNPR:1.5, LRBK:1.1, MRRT:0 } },
-  BONUS: { tipe:'bonus',   mult:2.5, wagerMin:50, wagerMax:200, kunci:'B',
-           opsi:{A:'QULL', B:'NOCT', C:'SPYR', D:'PRPR'}, netral:['A'] },
+           slot:{A:'LRBK', B:'EVRG', C:'MRRT', D:'HNPR'},
+           outcome:{ LRBK:1.1, EVRG:2.0, MRRT:-0.5, HNPR:1.5 } },
+  BONUS: { tipe:'bonus',   mult:2.5, wagerMin:50, wagerMax:200, kunci:'D',
+           opsi:{A:'SPYR', B:'PRPR', C:'QULL', D:'NOCT'}, netral:['C'] },
 };
 
 // Phase 3: urutan kronologis ronde (untuk kas berjalan & Safety Net yang berurutan),
@@ -313,7 +313,7 @@ function scoreAlokasi(alokasi, cfg) {
   let base = 0;
   for (const t in alokasi) base += alokasi[t] * (cfg.outcome[t] || 0);
   const payout = base * cfg.mult;
-  const net    = payout - 100;
+  const net    = Math.max(payout - 100, -cfg.wager);
   return { base, payout, net, cash: payout };
 }
 
