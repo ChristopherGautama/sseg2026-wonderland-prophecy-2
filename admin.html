@@ -115,6 +115,11 @@
   .instr-lose { color: #ff7d6d; }
   .instr-neutral { color: #d4d479; }
   .instr-skip { color: #999; }
+  .bank-action { white-space: nowrap; font-weight: 600; }
+  .ab-add  { color: #6fd989; }   /* hijau: tambah */
+  .ab-sub  { color: #ff7d6d; }   /* merah: ambil */
+  .ab-zero { color: #c9a961; }   /* emas: balik modal / tidak ikut */
+  .ab-none { color: #555; }
   .status-ok { color: #5fc77a; }
   .status-warn { color: #ffce5a; }
   .status-err { color: #ff6b5a; }
@@ -554,6 +559,43 @@ function hitungLeaderboard(st) {
   return rows;
 }
 
+// AKSI BANKIR (NET-SETTLE): perubahan KAS fisik satu tim pada ronde `rk`.
+// Memakai logika kronologis + Safety Net yang sama persis dengan hitungLeaderboard,
+// sehingga tumpukan chip tim == kolom KAS leaderboard. Return null jika ronde belum di-lock.
+function aksiBankirRonde(st, teamIdx, rk) {
+  let kas = MODAL_AWAL;
+  for (const fase of URUTAN_RONDE) {
+    const sub = st.rounds[fase] && st.rounds[fase].submissions[teamIdx];
+    const locked = sub && sub.locked;
+    if (fase === rk) {
+      if (!locked) return null;
+      const before = kas;
+      let after = before + bulatRp5(sub.net || 0);
+      let floored = false;
+      if (after < SAFETY_FLOOR) { after = SAFETY_FLOOR; floored = true; }
+      return { delta: after - before, floored, status: sub.status || '' };
+    }
+    if (locked) {
+      kas += bulatRp5(sub.net || 0);
+      if (kas < SAFETY_FLOOR) kas = SAFETY_FLOOR;
+    }
+  }
+  return null;
+}
+
+// Format teks + kelas warna untuk kolom & instruksi Bankir.
+function fmtAksiBankir(ab) {
+  if (!ab) return { text: '—', klass: 'ab-none' };
+  if (ab.status === 'SKIP' || ab.status === 'TIDAK IKUT')
+    return { text: 'TIDAK IKUT (Rp 0)', klass: 'ab-zero' };
+  if (ab.delta > 0)  return { text: `⬆ TAMBAH Rp ${ab.delta}`, klass: 'ab-add' };
+  if (ab.delta < 0) {
+    const extra = ab.floored ? ' · stop di Rp 100 (Safety Net)' : '';
+    return { text: `⬇ AMBIL Rp ${-ab.delta}${extra}`, klass: 'ab-sub' };
+  }
+  return { text: '= BALIK MODAL (Rp 0)', klass: 'ab-zero' };
+}
+
 /* ===================== HELPER ALOKASI ===================== */
 // Jumlah seluruh slot (keyed by ticker) untuk satu submission alokasi.
 function sumAlok(sub, cfg) {
@@ -739,7 +781,7 @@ function renderGrid(rk, cfg) {
   const pickHdr  = isTrio ? 'Pilih 3 (A–F)' : isAlok ? 'Alokasi per slot' : 'Pick';
   const wagerHdr = isAlok ? 'Total' : 'Wager';
   table.innerHTML = `<thead><tr>
-    <th>#</th><th>Nama Tim</th><th>${pickHdr}</th><th>${wagerHdr}</th><th>Status</th><th>Aksi</th><th>Total</th>
+    <th>#</th><th>Nama Tim</th><th>${pickHdr}</th><th>${wagerHdr}</th><th>Status</th><th>Aksi</th><th>Total</th><th>Aksi Bankir</th>
   </tr></thead>`;
   const tbody = document.createElement('tbody');
 
@@ -858,14 +900,21 @@ function renderGrid(rk, cfg) {
     tdTotal.innerHTML = `Σ <b>${fmtNet(teamTotalScore(i))}</b>`;
     tr.appendChild(tdTotal);
 
+    // ---------- Aksi Bankir (instruksi fisik absolut) ----------
+    const tdBank = document.createElement('td');
+    tdBank.className = 'bank-action';
+    tr.appendChild(tdBank);
+
     // refresh ringan: update validasi/status tanpa rebuild input (caret aman)
     refreshRow = () => {
       if (sub.locked) {
-        // Revisi 2: tampilkan hasil score inline (badge + net presisi + instruksi Bankir)
+        // Revisi 2: tampilkan hasil score inline (badge + net presisi + instruksi Bankir net-settle)
         tr.classList.remove('row-err', 'row-warn');
         const bl = bankerLine(rk, cfg, sub, state.teams[i]);
+        const ab = fmtAksiBankir(aksiBankirRonde(state, i, rk));
         tdStatus.innerHTML = `<div class="score-line">${statusBadge(bl.badge)} ${fmtNet(bl.r.net)}</div>` +
-          `<div class="bank-instr ${bl.klass}">${escapeHtml(bl.instr)}</div>`;
+          `<div class="bank-instr ${ab.klass}">${ab.text}</div>`;
+        tdBank.innerHTML = `<span class="${ab.klass}">${ab.text}</span>`;
         lockBtn.disabled = false;
       } else {
         const v = validateSubmission(sub, cfg, rk);
@@ -873,6 +922,7 @@ function renderGrid(rk, cfg) {
         tr.classList.toggle('row-warn', v.level === 'warn');
         const cls = v.level==='err' ? 'status-err' : v.level==='warn' ? 'status-warn' : 'status-ok';
         tdStatus.innerHTML = `<span class="${cls}">${v.msg}</span>`;
+        tdBank.innerHTML = '<span class="ab-none">—</span>';
         lockBtn.disabled = !v.ok;
       }
       if (isAlok && totalSpan) {
@@ -985,9 +1035,9 @@ function renderSummary(rk, cfg) {
   subs.forEach((sub, i) => {
     if (!sub.locked) return;   // tim belum lock di-skip
     count++;
-    const bl = bankerLine(rk, cfg, sub, state.teams[i]);
+    const ab = fmtAksiBankir(aksiBankirRonde(state, i, rk));
     lines += `<div class="pay-line"><b>${escapeHtml(state.teams[i])}</b> → ` +
-             `<span class="${bl.klass}">${escapeHtml(bl.instr)}</span></div>`;
+             `<span class="${ab.klass}">${escapeHtml(ab.text)}</span></div>`;
   });
 
   panel.innerHTML = `<button class="close-reveal" id="closeReveal">Tutup</button>` +
