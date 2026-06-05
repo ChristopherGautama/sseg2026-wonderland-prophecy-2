@@ -258,7 +258,7 @@ const ROUND_CONFIG = {
            opsi:{A:'SPYR', B:'PRPR', C:'RBBT', D:'NOCT'} },
   R3:    { tipe:'single',  mult:1.5, wagerMin:20, wagerMax:100, kunci:'B',
            opsi:{A:'QULL', B:'SPYR', C:'PRPR', D:'NOCT'} },
-  R4:    { tipe:'alokasi', mult:1.5, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
+  R4:    { tipe:'alokasi', mult:1.5, wager:100, minSaham:2, maxPerSaham:50, kelipatan:5,
            slot:{A:'NOCT', B:'SPYR', C:'GRIN', D:'MIRR', E:'QULL'},
            outcome:{ NOCT:0.5, SPYR:2.5, GRIN:0.5, MIRR:1.5, QULL:1.0 } },
   R5:    { tipe:'trio',    mult:1.5, wagerMin:30, wagerMax:150, trio:['B','D','F'],
@@ -267,10 +267,10 @@ const ROUND_CONFIG = {
            opsi:{A:'CSTR', B:'SPYR', C:'RBBT', D:'QULL', E:'LUMN', F:'MIRR'} },
   R7:    { tipe:'trio',    mult:2.0, wagerMin:30, wagerMax:150, trio:['B','C','E'],
            opsi:{A:'MIRR', B:'QULL', C:'NOCT', D:'SPYR', E:'GRIN', F:'TARO'} },
-  R8:    { tipe:'alokasi', mult:2.0, wager:100, minSaham:2, maxPerSaham:50, kelipatan:10,
+  R8:    { tipe:'alokasi', mult:2.0, wager:100, minSaham:2, maxPerSaham:50, kelipatan:5,
            slot:{A:'MIRR', B:'RBBT', C:'SPYR', D:'GRIN', E:'NOCT'},
            outcome:{ MIRR:0, RBBT:2.5, SPYR:0, GRIN:1.5, NOCT:1.0 } },
-  R9:    { tipe:'alokasi', mult:2.5, wager:100, maxPick:2, kelipatan:10,
+  R9:    { tipe:'alokasi', mult:2.5, wager:100, maxPick:2, kelipatan:5,
            slot:{A:'LRBK', B:'EVRG', C:'MRRT', D:'HNPR'},
            outcome:{ LRBK:1.1, EVRG:2.0, MRRT:-0.5, HNPR:1.5 } },
   BONUS: { tipe:'bonus',   mult:2.5, wagerMin:50, wagerMax:200, kunci:'D',
@@ -652,30 +652,32 @@ function validateTrio(sub, cfg) {
   return { ok:true, level:'ok', msg:'Valid (3 dipilih)' };
 }
 
-// ALOKASI: total harus = wager(100), kelipatan 10, non-negatif.
+// ALOKASI: total harus = wager(100), kelipatan 5, non-negatif.
 //  R4/R8: min saham terisi & maks per saham. R9: maks IPO terisi, total 0 boleh (tidak ikut).
+//  Revisi: validasi NON-BLOCKING -> semua pelanggaran return ok:true (LOCK selalu bisa),
+//  ditampilkan sebagai PERINGATAN amber ("⚠ di luar aturan"), bukan error merah yang nge-block.
 function validateAlokasi(sub, cfg) {
   const isR9 = cfg.maxPick != null;
   let nonzero = 0;
   for (const letter in cfg.slot) {
     const v = +(sub.alokasi[cfg.slot[letter]] || 0);
-    if (!Number.isFinite(v) || v < 0) return { ok:false, level:'err', msg:'Ada input negatif/invalid' };
+    if (!Number.isFinite(v) || v < 0) return { ok:true, level:'warn', msg:'⚠ di luar aturan: input negatif/invalid' };
     if (cfg.kelipatan && v % cfg.kelipatan !== 0)
-      return { ok:false, level:'err', msg:`Harus kelipatan ${cfg.kelipatan}` };
+      return { ok:true, level:'warn', msg:`⚠ di luar aturan: harus kelipatan ${cfg.kelipatan}` };
     if (cfg.maxPerSaham != null && v > cfg.maxPerSaham)
-      return { ok:false, level:'err', msg:`Maks ${cfg.maxPerSaham}/saham` };
+      return { ok:true, level:'warn', msg:`⚠ di luar aturan: maks ${cfg.maxPerSaham}/saham` };
     if (v > 0) nonzero++;
   }
   const total = sumAlok(sub, cfg);
   if (isR9) {
     if (total === 0) return { ok:true, level:'warn', msg:'Tim tidak ikut, skor 0' };
-    if (nonzero > cfg.maxPick) return { ok:false, level:'err', msg:`Maks ${cfg.maxPick} IPO` };
-    if (total !== cfg.wager) return { ok:false, level:'err', msg:`Total harus ${cfg.wager} (kini ${total})` };
+    if (nonzero > cfg.maxPick) return { ok:true, level:'warn', msg:`⚠ di luar aturan: maks ${cfg.maxPick} IPO` };
+    if (total !== cfg.wager) return { ok:true, level:'warn', msg:`⚠ di luar aturan: total harus ${cfg.wager} (kini ${total})` };
     return { ok:true, level:'ok', msg:`Total ${total} ✓` };
   }
   if (cfg.minSaham != null && nonzero < cfg.minSaham)
-    return { ok:false, level:'err', msg:`Min ${cfg.minSaham} saham terisi` };
-  if (total !== cfg.wager) return { ok:false, level:'err', msg:`Total harus ${cfg.wager} (kini ${total})` };
+    return { ok:true, level:'warn', msg:`⚠ di luar aturan: min ${cfg.minSaham} saham terisi` };
+  if (total !== cfg.wager) return { ok:true, level:'warn', msg:`⚠ di luar aturan: total harus ${cfg.wager} (kini ${total})` };
   return { ok:true, level:'ok', msg:`Total ${total} ✓` };
 }
 
@@ -929,7 +931,7 @@ function renderGrid(rk, cfg) {
         const total = sumAlok(sub, cfg);
         if (total === cfg.wager) { totalSpan.className = 'alok-total ok';  totalSpan.textContent = `Total: ${total} ✓`; }
         else if (cfg.maxPick != null && total === 0) { totalSpan.className = 'alok-total warn'; totalSpan.textContent = 'Total: 0 (tidak ikut)'; }
-        else { totalSpan.className = 'alok-total err'; totalSpan.textContent = `Total: ${total} ✗`; }
+        else { totalSpan.className = 'alok-total warn'; totalSpan.textContent = `Total: ${total} ⚠`; }
       }
     };
     refreshRow();  // initial paint
